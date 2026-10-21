@@ -1,4 +1,4 @@
 package main
 
 // 版本号：发布包与页面底部展示共用
-const Version = "0.2.0"
+const Version = "0.3.0"

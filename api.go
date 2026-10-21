@@ -59,6 +59,8 @@ func (a *App) routes() http.Handler {
 	mux.HandleFunc("GET /api/recordings/{id}/export", a.handleExport)
 	mux.HandleFunc("POST /api/recordings/{id}/translate", a.handleTranslate)
 	mux.HandleFunc("POST /api/recordings/{id}/summary", a.handleSummary)
+	mux.HandleFunc("POST /api/recordings/{id}/clip", a.handleClip)
+	mux.HandleFunc("GET /api/recordings/{id}/actions", a.handleActions)
 	mux.HandleFunc("POST /api/recordings/{id}/tts", a.handleTTS)
 	mux.HandleFunc("GET /api/recordings/{id}/tts", a.handleTTSAudio)
 
@@ -565,6 +567,39 @@ func (a *App) handleSummary(w http.ResponseWriter, r *http.Request) {
 	model := rec.SummaryModel
 	a.mu.RUnlock()
 	writeJSON(w, 200, map[string]any{"summary": content, "model": model})
+}
+
+// handleActions 抽取结构化待办（规则版，不调用大模型）
+func (a *App) handleActions(w http.ResponseWriter, r *http.Request) {
+	rec, ok := a.get(r.PathValue("id"))
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	a.mu.RLock()
+	segs := append([]Segment{}, rec.Segments...)
+	a.mu.RUnlock()
+	items := extractActionItems(segs)
+	if items == nil {
+		items = []ActionItem{}
+	}
+	writeJSON(w, 200, map[string]any{"items": items})
+}
+
+// handleClip 导出一段片段（可选把字幕烧进画面）
+func (a *App) handleClip(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var opt ClipOptions
+	if err := json.NewDecoder(r.Body).Decode(&opt); err != nil {
+		writeErr(w, 400, "请求格式错误")
+		return
+	}
+	rec, err := a.clipRecording(id, opt)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, 200, rec)
 }
 
 // handleTranslate 给整条记录补译文（本地 MarianMT，离线）

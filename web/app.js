@@ -377,6 +377,7 @@ async function selectRec(id) {
   $('dMeta').textContent = `${new Date(r.startedAt).toLocaleString('zh-CN', { hour12: false })} · ${fmtDur(r.durationMs)} · ${fmtSize(r.sizeBytes)}${r.mic ? ' · ' + r.mic : ''}${r.systemAudio ? ' · 含系统声音' : ''}`;
   if (r.sysWarning) toast(r.sysWarning, 'err');
   $('player').src = '/api/recordings/' + id + '/media';
+  resetClipUI(r);
   renderParts(r, id);
   $('transBtn').textContent = r.translateDir ? '重新翻译' : '翻译字幕';
   $('txtBtn').href = '/api/recordings/' + id + '/transcript?format=txt';
@@ -464,6 +465,60 @@ function renderTranscript(r) {
     };
     box.appendChild(div);
   });
+}
+
+/* ---------- 片段导出 ---------- */
+function resetClipUI(r) {
+  $('clipStart').value = '';
+  $('clipEnd').value = '';
+  $('clipState').textContent = '';
+  const audioOnly = r.mode === 'audio';
+  $('clipBurn').disabled = audioOnly;
+  $('clipBurn').checked = !audioOnly;
+  $('clipBurn').parentElement.title = audioOnly ? '录音没有画面，不能烧字幕' : '把字幕渲染进画面，导出即可直接发';
+}
+
+function markClip(which) {
+  const p = $('player');
+  const t = Math.max(0, p.currentTime || 0);
+  if (which === 'start') {
+    $('clipStart').value = t.toFixed(1);
+    if (!$('clipEnd').value) {
+      const dur = state.cur && state.cur.durationMs ? state.cur.durationMs / 1000 : t + 30;
+      $('clipEnd').value = Math.min(dur, t + 30).toFixed(1);
+    }
+  } else {
+    $('clipEnd').value = t.toFixed(1);
+  }
+}
+
+async function clipNow() {
+  if (!state.cur) return;
+  const start = parseFloat($('clipStart').value || '0') || 0;
+  const total = state.cur.durationMs ? state.cur.durationMs / 1000 : 0;
+  let end = parseFloat($('clipEnd').value || '0') || 0;
+  if (!end) end = total;
+  if (end <= start) { toast('终点要大于起点', 'err'); return; }
+  const burn = $('clipBurn').checked && !$('clipBurn').disabled;
+  const btn = $('clipBtn');
+  btn.disabled = true;
+  $('clipState').textContent = burn ? '正在烧字幕（要重编码，慢一点）…' : '正在生成…';
+  try {
+    const rec = await api('/api/recordings/' + state.cur.id + '/clip', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ start, end, burn, reencode: burn }),
+    });
+    toast('片段已生成');
+    state.curId = rec.id;
+    await loadList();
+    await selectRec(rec.id);
+  } catch (e) {
+    toast(e.message, 'err');
+    $('clipState').textContent = '';
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 /* ---------- 操作 ---------- */
@@ -777,4 +832,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('ltChk').onchange = saveLiveTrans;
   $('ltDir').onchange = saveLiveTrans;
   $('delBtn').onclick = del;
+  $('clipMarkStart').onclick = () => markClip('start');
+  $('clipMarkEnd').onclick = () => markClip('end');
+  $('clipBtn').onclick = clipNow;
 });

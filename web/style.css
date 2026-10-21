@@ -151,6 +151,9 @@ video { width: 100%; max-height: 460px; background: #000; border-radius: 10px; }
 .empty-icon { font-size: 42px; margin-bottom: 10px; }
 .muted { color: var(--muted); font-size: 12px; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; }
+.clip-bar { align-items: center; margin: 10px 0 4px; }
+.clip-bar .mini { width: 88px; }
+.clip-bar .muted { line-height: 28px; }
 
 #toast {
   position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%) translateY(20px);

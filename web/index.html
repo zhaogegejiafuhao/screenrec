@@ -191,6 +191,17 @@
         <div id="partBtns" class="row"></div>
       </div>
       <video id="player" controls playsinline></video>
+      <div id="clipBar" class="row clip-bar">
+        <span class="muted small">剪辑</span>
+        <input id="clipStart" class="mini" type="number" min="0" step="0.1" placeholder="起（秒）">
+        <span class="muted">→</span>
+        <input id="clipEnd" class="mini" type="number" min="0" step="0.1" placeholder="止（秒）">
+        <button id="clipMarkStart" class="btn small">取起点</button>
+        <button id="clipMarkEnd" class="btn small">取终点</button>
+        <label class="chk inline" title="把字幕渲染进画面，导出即可直接发"><input type="checkbox" id="clipBurn" checked><span>烧录字幕</span></label>
+        <button id="clipBtn" class="btn small primary">生成片段</button>
+        <span id="clipState" class="muted small"></span>
+      </div>
       <div id="summaryBox" class="summary" hidden></div>
       <audio id="ttsAudio" controls hidden class="tts-audio"></audio>
       <div id="transcribeState" class="muted"></div>

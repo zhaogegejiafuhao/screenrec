@@ -74,6 +74,9 @@ type Recording struct {
 	SummaryAt    *time.Time `json:"summaryAt,omitempty"`
 	SizeBytes    int64     `json:"sizeBytes"`
 	Pattern     string     `json:"-"` // 分段录制时的文件名模板
+	ClipOf       string    `json:"clipOf,omitempty"`       // 从哪条记录剪出来的
+	ClipStartSec float64   `json:"clipStartSec,omitempty"` // 原片里的起点（秒）
+	ClipBurned   bool      `json:"clipBurned,omitempty"`   // 是否烧录了字幕
 }
 
 // Recorder 管理 ffmpeg 录制进程

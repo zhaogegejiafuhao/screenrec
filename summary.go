@@ -135,11 +135,23 @@ func chatCompletion(ctx context.Context, base, key, model string, messages []cha
 	return strings.TrimSpace(out.Choices[0].Message.Content), nil
 }
 
-// summarizeRecord 生成纪要并写回记录
+// summarizeRecord 生成纪要并写回记录。
+// 没配 Key 时退到本地规则抽取，保证「不联网也能出纪要」。
 func (a *App) summarizeRecord(rec *Recording) (string, error) {
 	base, key, model := a.set.LLM()
 	if key == "" {
-		return "", fmt.Errorf("还没有配置 API Key：网页左下角「AI 纪要设置」里填一个")
+		content, err := a.localSummary(rec)
+		if err != nil {
+			return "", err
+		}
+		now := time.Now()
+		a.mu.Lock()
+		rec.Summary = content
+		rec.SummaryModel = "本地抽取"
+		rec.SummaryAt = &now
+		a.mu.Unlock()
+		a.recorder.save(rec)
+		return content, nil
 	}
 
 	a.mu.RLock()

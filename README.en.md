@@ -35,7 +35,7 @@ labels speakers, translates bilingual subtitles, and exports meeting notes to Ma
 
 ```powershell
 # easiest: single-file installer (per-user, no admin rights, shortcuts + uninstall entry)
-.\setup-0.2.0.exe
+.\setup-0.3.0.exe
 
 # or from source
 powershell -ExecutionPolicy Bypass -File scripts\fetch-models.ps1   # 1. models (~1.1 GB)

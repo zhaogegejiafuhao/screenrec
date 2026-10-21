@@ -26,6 +26,7 @@ var ship = []string{
 func main() {
 	version := flag.String("version", "0.1.0", "版本号")
 	exe := flag.String("exe", "screenrec.exe", "已编译的 exe")
+	mcp := flag.String("mcp", "", "MCP server 可执行文件（可选，一起打包）")
 	out := flag.String("out", "dist", "输出目录")
 	flag.Parse()
 
@@ -42,6 +43,13 @@ func main() {
 
 	if err := copyFile(*exe, filepath.Join(stage, "screenrec.exe")); err != nil {
 		fatal(err)
+	}
+	if *mcp != "" {
+		if _, err := os.Stat(*mcp); err == nil {
+			if err := copyFile(*mcp, filepath.Join(stage, "screenrec-mcp.exe")); err != nil {
+				fmt.Fprintf(os.Stderr, "跳过 MCP server: %v\n", err)
+			}
+		}
 	}
 	for _, f := range ship {
 		dst := filepath.Join(stage, filepath.FromSlash(f))

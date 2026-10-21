@@ -24,7 +24,9 @@
 - **整段精校**：停止后自动用 VAD 重新分段转写，准确率更高
 - **时间戳**：每段带起止时间，点一下跳到对应画面
 - **纪要导出**：Markdown / Word 一键生成，按说话人合并成段、带时间轴，可选「公式整理」
-- **AI 纪要**：接 OpenAI 兼容接口（DeepSeek / 通义 / 本地 Ollama），输出议题 / 结论 / 待办
+- **AI 纪要**：接 OpenAI 兼容接口（DeepSeek / 通义 / 本地 Ollama），输出议题 / 结论 / 待办；**没 Key 时自动退到本地规则抽取**
+- **片段导出**：框选起止点裁一段，可把字幕烧进画面，直接发出去
+- **MCP server**：把录制、文稿、纪要、待办、剪辑暴露给 Claude Desktop / Cursor 等 AI 客户端
 - **实时双语**：断句即译，悬浮条上下两行；本地 MarianMT，热态 0.3 秒/句
 - **声音克隆配音**：对接本机 GPT-SoVITS，把转写用你的音色读出来
 - **双语字幕**：本地 MarianMT 离线翻译（英→中 / 中→英），术语原样保留，可导出双语 SRT
@@ -575,19 +577,20 @@ MarianMT + PyTorch（复用 GPT-SoVITS 内置的 Python 3.9 运行时），CPU �
 
 ```powershell
 go build -ldflags "-H windowsgui" -o build\screenrec.exe .
-go run ./tools/release -version 0.2.0 -exe build\screenrec.exe
+go build -o build\screenrec-mcp.exe .\tools\mcpserver
+go run ./tools/release -version 0.3.0 -exe build\screenrec.exe -mcp build\screenrec-mcp.exe
 
 # 单文件安装包：stub + 把发布 zip 追加到自己末尾 + 页脚
 go build -o build\setup-stub.exe .\tools\installer
-build\setup-stub.exe -pack dist\screenrec-0.2.0-win64.zip -out dist\setup-0.2.0.exe -version 0.2.0
+build\setup-stub.exe -pack dist\screenrec-0.3.0-win64.zip -out dist\setup-0.3.0.exe -version 0.3.0
 ```
 
 输出两个产物：
 
 | 文件 | 说明 |
 |---|---|
-| `dist/screenrec-0.2.0-win64.zip`（6.8MB） | 绿色版，解压即用；同名 `.sha256` |
-| `dist/setup-0.2.0.exe`（10.4MB） | 安装包：单文件，双击就装，**不需要管理员权限** |
+| `dist/screenrec-0.3.0-win64.zip`（约 9MB） | 绿色版，解压即用；同名 `.sha256` |
+| `dist/setup-0.3.0.exe`（约 13MB） | 安装包：单文件，双击就装，**不需要管理员权限** |
 
 安装包做的事（`tools/installer`，纯 Go，不依赖 Inno Setup / NSIS）：
 
@@ -597,6 +600,62 @@ build\setup-stub.exe -pack dist\screenrec-0.2.0-win64.zip -out dist\setup-0.2.0.
 - 首次安装可顺手下载模型（1.1GB），也可以之后跑 `scripts\fetch-models.ps1`
 - 卸载：`unins.exe` 会拉一个临时副本删整个目录（自己删不掉自己）
 - 打包原理：`setup.exe = stub + zip + 48 字节页脚`。CI 里没有 zip 也能正常编 stub
+
+### 十九、片段导出（剪辑 + 烧字幕）
+
+录完一整条 40 分钟的会，往往只需要其中 2 分钟发给别人。详情页的「剪辑」行：
+
+- 播放到位置点「取起点 / 取终点」，或直接填秒数
+- 勾「烧录字幕」= 字幕渲染进画面（重编码，慢一点）；不勾 = 流拷贝，几秒就出
+- 生成后作为一条**新记录**出现在列表里，`clipOf` 字段记着它从哪条剪出来
+
+实现上有两个小决定：
+
+- **字幕文件放临时目录，ffmpeg 的 cwd 也切过去**。filter 里只写 `subtitles=clip.srt`，
+  彻底绕开 Windows 路径里 `C:` 冒号在 filtergraph 中的转义问题
+- **不勾烧录时用 `-c copy`**：只切在关键帧上，可能差个零点几秒，但 10 秒的片段 1 秒就出；
+  要精确到帧就勾上烧录（走 libx264 重编码）
+
+样式用 `force_style`：微软雅黑 20 号、白字黑边、底部 28px 边距。
+
+### 二十、本地纪要（没有 API Key 也能出）
+
+之前点「AI 纪要」不填 Key 就直接报错，等于这条链路断在半路。现在没 Key 会退到**本地规则抽取**：
+
+- 按停顿（>90 秒）和说话人变化切成议题块
+- 关键词用 2~4 字 n-gram 频次 + 长度加权，含虚词的碎片直接丢（"擎的测试"这种）
+- 结论/待办/风险按句式匹配；待办还会抽**负责人**（"X 负责…"）和**时间**（明天/下周三/10月25日/next week）
+- 否定句不算待办（"不需要参考音频"）
+- 结果同样是五段式，末尾标注"本地规则抽取（未调用大模型）"
+
+质量当然不如大模型，但零配置、离线、瞬时出结果，而且待办是**结构化**的
+（`GET /api/recordings/{id}/actions` 返回 `{text, owner, due, at}`），可以直接进 Todo。
+
+### 二十一、MCP server
+
+`tools/mcpserver` 是一个 stdio 的 Model Context Protocol 服务，把本机数据接进 AI 客户端：
+
+```json
+{
+  "mcpServers": {
+    "screenrec": { "command": "D:\\path\\screenrec-mcp.exe" }
+  }
+}
+```
+
+工具（都走 `127.0.0.1:8790`，不联网）：
+
+| 工具 | 作用 |
+|---|---|
+| `list_recordings` | 列出录制（标题/时长/是否已转写/有无纪要） |
+| `get_transcript` | 取文稿，带 `[mm:ss]` 和说话人 |
+| `search_transcripts` | 跨记录搜关键词，返回时间点 |
+| `get_summary` / `generate_summary` | 读 / 生成纪要（没 Key 走本地抽取） |
+| `get_action_items` | 结构化待办 |
+| `clip_recording` | 裁片段，可选烧字幕 |
+
+Claude Desktop / Cursor 里可以直接问："上周哪次会提到预算？把结论和待办列出来。"
+服务没启动时会明确提示先双击 `screenrec.exe`。
 
 ## 目录结构
 
@@ -621,6 +680,9 @@ screenrec/
 ├── translate.py       # MarianMT 翻译（单次 / 常驻两种模式）
 ├── translate_live.go  # 实时字幕用的翻译常驻客户端
 ├── summary.go         # AI 纪要（OpenAI 兼容接口）
+├── summary_local.go   # 无 Key 的本地抽取纪要 + 结构化待办
+├── editor.go          # 片段导出（流拷贝 / 重编码 / 烧字幕）
+├── tools/mcpserver/   # MCP server（stdio，给 Claude/Cursor 用）
 ├── tts.go             # 声音克隆配音（GPT-SoVITS）
 ├── version.go         # 版本号
 ├── glossary.json      # 术语保护表（可自行追加）
@@ -668,6 +730,9 @@ screenrec/
 - [ ] **跨设备互斥做不到**：需要账号体系与服务端会话，纯本地无解
 - [ ] 公式只做到「规则可读化」：复杂公式（矩阵、多行推导、上下标嵌套）需要接 LLM 转 LaTeX
 - [ ] 实时双语只翻断句后的最终结果（不翻流式草稿），冷启动 49~84 秒，已在开启时后台预热
+- [ ] 本地纪要是规则抽取，复杂会议会漏议题；要质量还是要配 Key（或本地 Ollama）
+- [ ] 剪辑不勾烧录时只能切在关键帧（可能差 0.2~1 秒）；烧字幕要重编码，4K 长片段会慢
+- [ ] MCP 的跨记录搜索是逐条读 JSON，记录上百条时首次搜索偏慢
 - [ ] AI 纪要需要自带 API Key；转写超过 14000 字会截断
 - [ ] 声音克隆配音依赖单独的 GPT-SoVITS（14GB），单次上限 800 字
 - [ ] 分词/断句仍按标点，长句翻译质量一般；术语表需要自己维护
