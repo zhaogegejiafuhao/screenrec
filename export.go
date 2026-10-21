@@ -126,6 +126,9 @@ func metaLines(rec *Recording) []string {
 	if rec.TranslateDir != "" {
 		lines = append(lines, "字幕：双语（"+directionName(rec.TranslateDir)+"）")
 	}
+	if rec.SummaryAt != nil && rec.SummaryModel != "" {
+		lines = append(lines, "纪要模型："+rec.SummaryModel)
+	}
 	return lines
 }
 
@@ -142,6 +145,11 @@ func buildMarkdown(rec *Recording, doMath bool) string {
 		fmt.Fprintf(&b, "- %s\n", l)
 	}
 	b.WriteString("\n---\n\n")
+
+	if rec.Summary != "" {
+		b.WriteString(rec.Summary)
+		b.WriteString("\n\n---\n\n")
+	}
 
 	if len(blocks) == 0 {
 		b.WriteString("_（没有识别到语音内容）_\n")
@@ -253,6 +261,26 @@ func buildDocx(rec *Recording, doMath bool) ([]byte, error) {
 
 	for _, l := range metaLines(rec) {
 		body.WriteString(paraXML("", 280, []docRun{{Text: l, Color: "666666", Size: 19}}))
+	}
+
+	if rec.Summary != "" {
+		body.WriteString(paraXML("", 360, []docRun{{Text: "AI 纪要", Bold: true, Size: 30}}))
+		for _, line := range strings.Split(rec.Summary, "\n") {
+			line = strings.TrimSpace(line)
+			switch {
+			case line == "" || line == "---":
+				continue
+			case strings.HasPrefix(line, "## "):
+				body.WriteString(paraXML("", 320, []docRun{{Text: strings.TrimPrefix(line, "## "), Bold: true, Color: "1A6DFF", Size: 24}}))
+			case strings.HasPrefix(line, "- [ ] "):
+				body.WriteString(paraXML("", 300, []docRun{{Text: "☐ " + strings.TrimPrefix(line, "- [ ] ")}}))
+			case strings.HasPrefix(line, "- "):
+				body.WriteString(paraXML("", 300, []docRun{{Text: "• " + strings.TrimPrefix(line, "- ")}}))
+			default:
+				body.WriteString(paraXML("", 320, []docRun{{Text: line}}))
+			}
+		}
+		body.WriteString(paraXML("", 360, []docRun{{Text: "— 以下为完整转写 —", Color: "999999", Size: 18}}))
 	}
 
 	if len(blocks) == 0 {

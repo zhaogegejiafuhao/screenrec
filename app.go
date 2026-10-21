@@ -32,6 +32,8 @@ type App struct {
 	recordings map[string]*Recording
 	url        string
 	quit       chan struct{}
+	ltMu       sync.Mutex
+	lt         *liveMT
 }
 
 // RequestQuit 请求退出（托盘菜单用）

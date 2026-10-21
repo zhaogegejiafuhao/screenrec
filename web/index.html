@@ -106,12 +106,47 @@
       </div>
       <div class="meter live"><div id="liveFill"></div></div>
       <div id="liveText" class="live-text"></div>
+      <div id="liveTrans" class="live-trans" hidden></div>
     </div>
 
     <div class="foot">
       <button id="overlayBtn" class="btn small">🪟 显示 / 隐藏悬浮字幕</button>
       <label class="chk"><input type="checkbox" id="meetingChk" checked><span>开会时自动提醒</span></label>
       <label class="chk"><input type="checkbox" id="autoChk"><span>开机自动启动</span></label>
+      <label class="chk">
+        <input type="checkbox" id="ltChk"><span>实时双语</span>
+        <select id="ltDir" class="mini">
+          <option value="auto">自动</option>
+          <option value="en2zh">英→中</option>
+          <option value="zh2en">中→英</option>
+        </select>
+      </label>
+      <details class="cfg">
+        <summary>AI 纪要设置</summary>
+        <input id="llmBase" type="text" placeholder="接口地址 https://api.deepseek.com/v1">
+        <input id="llmModel" type="text" placeholder="模型 deepseek-chat">
+        <input id="llmKey" type="password" placeholder="API Key（只存本机 settings.json）">
+        <div class="row">
+          <button id="llmSave" class="btn small primary">保存</button>
+          <button id="llmClear" class="btn small">清除 Key</button>
+        </div>
+        <div id="llmState" class="muted small"></div>
+      </details>
+      <details class="cfg">
+        <summary>配音设置（声音克隆）</summary>
+        <input id="ttsUrl" type="text" placeholder="GPT-SoVITS 地址 http://127.0.0.1:9880">
+        <input id="ttsRef" type="text" placeholder="参考音频绝对路径，如 D:\voices\me.wav">
+        <input id="ttsPrompt" type="text" placeholder="参考音频对应的文字（要和录音逐字一致）">
+        <select id="ttsLang" class="mini">
+          <option value="zh">中文</option>
+          <option value="en">英文</option>
+          <option value="ja">日文</option>
+        </select>
+        <div class="row">
+          <button id="ttsSave" class="btn small primary">保存</button>
+        </div>
+        <div id="ttsState" class="muted small"></div>
+      </details>
       <div class="muted small">Ctrl+Alt+Space 开始 / 停止 · 拖悬浮条左侧圆点可移动</div>
       <div class="muted small">
         录音授权 <span id="consentState">已确认</span>
@@ -138,6 +173,8 @@
           <button id="transcribeBtn" class="btn small">重新转写</button>
           <button id="diarizeBtn" class="btn small">区分说话人</button>
           <button id="transBtn" class="btn small">翻译字幕</button>
+          <button id="summaryBtn" class="btn small">AI 纪要</button>
+          <button id="ttsBtn" class="btn small">生成配音</button>
           <a id="txtBtn" class="btn small" download>导出 TXT</a>
           <a id="srtBtn" class="btn small" download>导出 SRT</a>
           <label class="chk inline" title="把口语数学表达整理成符号：x²、∫₀^∞、O(n²)">
@@ -154,6 +191,8 @@
         <div id="partBtns" class="row"></div>
       </div>
       <video id="player" controls playsinline></video>
+      <div id="summaryBox" class="summary" hidden></div>
+      <audio id="ttsAudio" controls hidden class="tts-audio"></audio>
       <div id="transcribeState" class="muted"></div>
       <div id="segments" class="segments"></div>
       <div id="plainText" class="plain" hidden></div>

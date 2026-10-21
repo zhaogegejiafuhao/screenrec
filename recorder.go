@@ -56,6 +56,8 @@ type Recording struct {
 	Segments    []Segment  `json:"segments"`
 	LiveText    string     `json:"liveText"`
 	LivePartial string     `json:"livePartial"`
+	LiveTrans   string     `json:"liveTrans,omitempty"`
+	LiveDir     string     `json:"-"`
 	LiveLevel   int        `json:"liveLevel"`
 	Encoder     string     `json:"encoder,omitempty"`
 	Transcribed bool       `json:"transcribed"`
@@ -64,7 +66,10 @@ type Recording struct {
 	Diarizing   bool       `json:"diarizing"`
 	Speakers    int        `json:"speakers"`
 	TranslateDir string    `json:"translateDir,omitempty"` // en2zh / zh2en
-	SizeBytes   int64      `json:"sizeBytes"`
+	Summary      string    `json:"summary,omitempty"`      // AI 纪要（Markdown）
+	SummaryModel string    `json:"summaryModel,omitempty"`
+	SummaryAt    *time.Time `json:"summaryAt,omitempty"`
+	SizeBytes    int64     `json:"sizeBytes"`
 	Pattern     string     `json:"-"` // 分段录制时的文件名模板
 }
 
@@ -490,6 +495,10 @@ func (r *Recorder) liveLoop(rec *Recording, pcmPath string, stop chan struct{}) 
 	const bytesPerSec = sr * 2
 	chunkBytes := int64(bytesPerSec * 2.5)
 	overlapBytes := int64(bytesPerSec * 0.3)
+	liveOn, liveDirCfg := false, "auto"
+	if r.app.set != nil {
+		liveOn, liveDirCfg = r.app.set.LiveTransConfig()
+	}
 
 	var f *os.File
 	for i := 0; i < 40; i++ {
@@ -590,6 +599,7 @@ func (r *Recorder) liveLoop(rec *Recording, pcmPath string, stop chan struct{}) 
 					rec.LivePartial = ""
 				}
 				r.app.mu.Unlock()
+				r.translateAsync(rec, text, liveOn, liveDirCfg)
 				uttStart = consumed
 				lastPartial = ""
 			} else if partial != "" && partial != lastPartial {
@@ -631,6 +641,7 @@ func (r *Recorder) liveLoop(rec *Recording, pcmPath string, stop chan struct{}) 
 			appendLive(rec, startSec, endSec, text)
 		}
 		r.app.mu.Unlock()
+		r.translateAsync(rec, text, liveOn, liveDirCfg)
 	}
 }
 
@@ -663,6 +674,47 @@ func appendLive(rec *Recording, start, end float64, text string) {
 
 func round2(f float64) float64 {
 	return float64(int(f*100+0.5)) / 100
+}
+
+// translateAsync 实时字幕：断句后异步翻译，结果写回 rec.LiveTrans
+func (r *Recorder) translateAsync(rec *Recording, text string, on bool, cfgDir string) {
+	if !on || strings.TrimSpace(text) == "" {
+		return
+	}
+	go func() {
+		r.app.mu.RLock()
+		dir := rec.LiveDir
+		alive := rec.Status == "recording"
+		r.app.mu.RUnlock()
+		if !alive {
+			return
+		}
+		if dir == "" {
+			dir = cfgDir
+		}
+		tr, err := r.app.translateLive(text, dir)
+		if err != nil || strings.TrimSpace(tr) == "" {
+			return
+		}
+		// 方向一旦确定就固定下来，避免中英混说时反复切换模型
+		if dir == "auto" {
+			dir = detectDirection(text)
+		}
+
+		r.app.mu.Lock()
+		if rec.Status == "recording" {
+			rec.LiveTrans = joinSentence(rec.LiveTrans, tr)
+			rec.LiveDir = dir
+			if n := len([]rune(rec.LiveTrans)); n > 600 {
+				rec.LiveTrans = "…" + string([]rune(rec.LiveTrans)[n-600:])
+			}
+		}
+		trans := rec.LiveTrans
+		r.app.mu.Unlock()
+		if r.app.overlay != nil {
+			r.app.overlay.SetTrans(trans)
+		}
+	}()
 }
 
 func joinText(segs []Segment) string {

@@ -102,6 +102,11 @@ func main() {	setupDPI()
 	}
 	app.url = url
 
+	// 上次开着实时双语的话，启动时就后台加载翻译模型
+	if on, dir := app.set.LiveTransConfig(); on {
+		go app.warmLiveTranslate(dir)
+	}
+
 	// 预热识别进程，避免第一段实时字幕卡顿
 	go func() {
 		if app.python != "" {
@@ -174,8 +179,9 @@ func watchOverlay(app *App) {
 			}
 			if !app.overlay.IsDismissed() {
 				app.mu.RLock()
-				text, partial, level := rec.LiveText, rec.LivePartial, rec.LiveLevel
+				text, partial, level, trans := rec.LiveText, rec.LivePartial, rec.LiveLevel, rec.LiveTrans
 				app.mu.RUnlock()
+				app.overlay.SetTrans(trans)
 				app.overlay.Text(tailRunes(text, 90), partial, level)
 			}
 			continue
@@ -203,6 +209,7 @@ func watchOverlay(app *App) {
 
 		if prev != "idle" {
 			app.overlay.SetIdle()
+			app.overlay.SetTrans("")
 			app.overlay.Text("", "", 0)
 			if !app.overlay.IsDismissed() {
 				app.overlay.SetVisible(true)

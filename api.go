@@ -58,6 +58,9 @@ func (a *App) routes() http.Handler {
 	mux.HandleFunc("GET /api/recordings/{id}/transcript", a.handleTranscript)
 	mux.HandleFunc("GET /api/recordings/{id}/export", a.handleExport)
 	mux.HandleFunc("POST /api/recordings/{id}/translate", a.handleTranslate)
+	mux.HandleFunc("POST /api/recordings/{id}/summary", a.handleSummary)
+	mux.HandleFunc("POST /api/recordings/{id}/tts", a.handleTTS)
+	mux.HandleFunc("GET /api/recordings/{id}/tts", a.handleTTSAudio)
 
 	return logMiddleware(mux)
 }
@@ -83,6 +86,7 @@ func (a *App) handleState(w http.ResponseWriter, r *http.Request) {
 		"encoder":    detectEncoder(a.ffmpeg),
 		"recording":  a.recorder.Current(),
 		"modelReady": a.python != "",
+		"version":    Version,
 		"overlay":    a.overlay.IsVisible(),
 		"overlayHwnd": a.overlay.Hwnd(),
 		"overlayPos": a.overlay.Pos(),
@@ -93,12 +97,25 @@ func (a *App) handleState(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) settingsView() map[string]any {
+	llmBase, _, llmModel := a.set.LLM()
+	ltOn, ltDir := a.set.LiveTransConfig()
+	ttsURL, ttsRef, ttsPrompt, ttsLang := a.set.TTSConfig()
 	return map[string]any{
 		"consentAccepted": a.set.ConsentOK(),
 		"meetingPrompt":   a.set.MeetingEnabled(),
 		"mutedApps":       a.set.Muted(),
 		"overlayHidden":   a.set.Hidden(),
 		"autoStart":       autoStartEnabled(),
+		"llmBaseUrl":      llmBase,
+		"llmModel":        llmModel,
+		"llmKeySet":       a.set.HasLLMKey(),
+		"liveTranslate":   ltOn,
+		"liveTransDir":    ltDir,
+		"ttsUrl":          ttsURL,
+		"ttsRefPath":      ttsRef,
+		"ttsPrompt":       ttsPrompt,
+		"ttsLang":         ttsLang,
+		"ttsReady":        ttsURL != "" && ttsRef != "",
 	}
 }
 
@@ -144,6 +161,15 @@ func (a *App) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		ResetOverlayPos *bool  `json:"resetOverlayPos"`
 		Unmute         *string `json:"unmute"`
 		AutoStart      *bool   `json:"autoStart"`
+		LLMBaseURL     *string `json:"llmBaseUrl"`
+		LLMModel       *string `json:"llmModel"`
+		LLMAPIKey      *string `json:"llmApiKey"`
+		LiveTranslate  *bool   `json:"liveTranslate"`
+		LiveTransDir   *string `json:"liveTransDir"`
+		TTSUrl         *string `json:"ttsUrl"`
+		TTSRefPath     *string `json:"ttsRefPath"`
+		TTSPrompt      *string `json:"ttsPrompt"`
+		TTSLang        *string `json:"ttsLang"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, 400, "请求格式错误")
@@ -179,6 +205,57 @@ func (a *App) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if req.LLMBaseURL != nil || req.LLMModel != nil || req.LLMAPIKey != nil {
+		base, _, model := a.set.LLM()
+		if req.LLMBaseURL != nil {
+			if *req.LLMBaseURL == "-" {
+				base = ""
+			} else if *req.LLMBaseURL != "" {
+				base = *req.LLMBaseURL
+			}
+		}
+		if req.LLMModel != nil {
+			if *req.LLMModel == "-" {
+				model = ""
+			} else if *req.LLMModel != "" {
+				model = *req.LLMModel
+			}
+		}
+		key := ""
+		if req.LLMAPIKey != nil {
+			key = *req.LLMAPIKey
+		}
+		a.set.SetLLM(base, key, model)
+	}
+	if req.LiveTranslate != nil || req.LiveTransDir != nil {
+		on, dir := a.set.LiveTransConfig()
+		if req.LiveTranslate != nil {
+			on = *req.LiveTranslate
+		}
+		if req.LiveTransDir != nil {
+			dir = *req.LiveTransDir
+		}
+		a.set.SetLiveTranslate(on, dir)
+		if req.LiveTranslate != nil && *req.LiveTranslate {
+			go a.warmLiveTranslate(dir) // 后台加载，开启后第一句不用干等
+		}
+	}
+	if req.TTSUrl != nil || req.TTSRefPath != nil || req.TTSPrompt != nil || req.TTSLang != nil {
+		url, ref, prompt, lang := a.set.TTSConfig()
+		if req.TTSUrl != nil {
+			url = *req.TTSUrl
+		}
+		if req.TTSRefPath != nil {
+			ref = *req.TTSRefPath
+		}
+		if req.TTSPrompt != nil {
+			prompt = *req.TTSPrompt
+		}
+		if req.TTSLang != nil {
+			lang = *req.TTSLang
+		}
+		a.set.SetTTS(url, ref, prompt, lang)
+	}
 	writeJSON(w, 200, a.settingsView())
 }
 
@@ -192,11 +269,15 @@ func (a *App) handleOverlay(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Show  *bool   `json:"show"`
 		Text  *string `json:"text"`
+		Trans *string `json:"trans"`
 		Level *int    `json:"level"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, 400, "请求格式错误")
 		return
+	}
+	if req.Trans != nil {
+		a.overlay.SetTrans(*req.Trans)
 	}
 	if req.Text != nil {
 		lv := 0
@@ -266,6 +347,7 @@ func (a *App) handleLive(w http.ResponseWriter, r *http.Request) {
 	started := rec.StartedAt
 	level := rec.LiveLevel
 	partial := rec.LivePartial
+	trans := rec.LiveTrans
 	a.mu.RUnlock()
 	writeJSON(w, 200, map[string]any{
 		"recording": true,
@@ -273,6 +355,7 @@ func (a *App) handleLive(w http.ResponseWriter, r *http.Request) {
 		"segments":  segs,
 		"text":      joinText(segs),
 		"partial":   partial,
+		"trans":     trans,
 		"level":     level,
 	})
 }
@@ -417,6 +500,71 @@ func (a *App) handleTranscript(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", ctype)
 	w.Header().Set("Content-Disposition", attachment(fn))
 	w.Write([]byte(body))
+}
+
+// handleTTS 用本地 GPT-SoVITS 合成配音
+func (a *App) handleTTS(w http.ResponseWriter, r *http.Request) {
+	rec, ok := a.get(r.PathValue("id"))
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	var req struct {
+		Text string `json:"text"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	path, err := a.synthesizeSpeech(rec, req.Text)
+	if err != nil && path == "" {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	resp := map[string]any{"url": "/api/recordings/" + rec.ID + "/tts"}
+	if err != nil {
+		resp["warning"] = err.Error()
+	}
+	writeJSON(w, 200, resp)
+}
+
+// handleTTSAudio 播放已生成的配音
+func (a *App) handleTTSAudio(w http.ResponseWriter, r *http.Request) {
+	rec, ok := a.get(r.PathValue("id"))
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	path := filepath.Join(a.recordsDir, rec.ID+"-tts.wav")
+	f, err := os.Open(path)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "audio/wav")
+	http.ServeContent(w, r, "tts.wav", st.ModTime(), f)
+}
+
+// handleSummary 用大模型生成会议纪要（OpenAI 兼容接口）
+func (a *App) handleSummary(w http.ResponseWriter, r *http.Request) {
+	rec, ok := a.get(r.PathValue("id"))
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	content, err := a.summarizeRecord(rec)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	a.mu.RLock()
+	model := rec.SummaryModel
+	a.mu.RUnlock()
+	writeJSON(w, 200, map[string]any{"summary": content, "model": model})
 }
 
 // handleTranslate 给整条记录补译文（本地 MarianMT，离线）

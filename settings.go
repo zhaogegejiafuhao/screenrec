@@ -27,6 +27,96 @@ type Settings struct {
 	OverlayY      int32 `json:"overlayY"`
 	// 关闭了会议提醒的会议应用
 	AcceptedCount int `json:"acceptedCount"`
+
+	// AI 纪要：OpenAI 兼容接口（DeepSeek / 通义 / Kimi / 本地 Ollama 都行）
+	LLMBaseURL string `json:"llmBaseUrl"`
+	LLMAPIKey  string `json:"llmApiKey"`
+	LLMModel   string `json:"llmModel"`
+
+	// 实时双语字幕
+	LiveTranslate bool   `json:"liveTranslate"`
+	LiveTransDir  string `json:"liveTransDir"` // auto / en2zh / zh2en
+
+	// 声音克隆（对接 GPT-SoVITS 的 HTTP API）
+	TTSURL     string `json:"ttsUrl"`     // 例如 http://127.0.0.1:9880
+	TTSRefPath string `json:"ttsRefPath"` // 参考音频的绝对路径（服务端要能读到）
+	TTSPrompt  string `json:"ttsPrompt"`  // 参考音频对应的文字
+	TTSLang    string `json:"ttsLang"`    // zh / en / ja
+}
+
+const (
+	defaultLLMBase  = "https://api.deepseek.com/v1"
+	defaultLLMModel = "deepseek-chat"
+)
+
+// LLM 返回接口配置，空值时给默认（DeepSeek）
+func (s *Settings) LLM() (base, key, model string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	base, key, model = s.LLMBaseURL, s.LLMAPIKey, s.LLMModel
+	if base == "" {
+		base = defaultLLMBase
+	}
+	if model == "" {
+		model = defaultLLMModel
+	}
+	return
+}
+
+// SetLLM 保存接口配置；key 为空表示保持原值，传 "-" 表示清除
+func (s *Settings) SetLLM(base, key, model string) {
+	s.mu.Lock()
+	s.LLMBaseURL = base
+	s.LLMModel = model
+	if key == "-" {
+		s.LLMAPIKey = ""
+	} else if key != "" {
+		s.LLMAPIKey = key
+	}
+	s.mu.Unlock()
+	s.save()
+}
+
+func (s *Settings) HasLLMKey() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.LLMAPIKey != ""
+}
+
+func (s *Settings) LiveTransConfig() (bool, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	dir := s.LiveTransDir
+	if dir == "" {
+		dir = "auto"
+	}
+	return s.LiveTranslate, dir
+}
+
+func (s *Settings) SetLiveTranslate(on bool, dir string) {
+	s.mu.Lock()
+	s.LiveTranslate = on
+	s.LiveTransDir = dir
+	s.mu.Unlock()
+	s.save()
+}
+
+// TTSConfig 返回声音克隆配置（默认中文）
+func (s *Settings) TTSConfig() (url, ref, prompt, lang string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	lang = s.TTSLang
+	if lang == "" {
+		lang = "zh"
+	}
+	return s.TTSURL, s.TTSRefPath, s.TTSPrompt, lang
+}
+
+func (s *Settings) SetTTS(url, ref, prompt, lang string) {
+	s.mu.Lock()
+	s.TTSURL, s.TTSRefPath, s.TTSPrompt, s.TTSLang = url, ref, prompt, lang
+	s.mu.Unlock()
+	s.save()
 }
 
 func loadSettings(dataDir string) *Settings {

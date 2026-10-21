@@ -33,6 +33,13 @@
 | [opus-mt-en-zh](https://huggingface.co/Helsinki-NLP/opus-mt-en-zh) | 英译中 | 301MB | Apache-2.0 |
 | [opus-mt-zh-en](https://huggingface.co/Helsinki-NLP/opus-mt-zh-en) | 中译英 | 301MB | Apache-2.0 |
 
+## 可选组件（不随仓库分发）
+
+| 组件 | 用途 | 许可证 |
+|---|---|---|
+| [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) | 声音克隆配音（`tts.go` 通过 HTTP 调用其 `api.py`） | MIT |
+| [Ollama](https://ollama.com/) / DeepSeek / 通义等 | AI 纪要，任意 OpenAI 兼容接口 | 各自条款 |
+
 > 「以官方仓库为准」表示本项目未逐一核验其模型条款。若你要商用或再分发模型，
 > 请先到对应仓库确认。代码仓库只包含转换后的推理脚本，不包含权重。
 

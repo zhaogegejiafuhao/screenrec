@@ -93,11 +93,24 @@ async function loadState() {
     pill.textContent = '未找到 ffmpeg';
     pill.className = 'pill bad';
   }
-  $('engineInfo').textContent = s.python ? '本地识别引擎：已配置' : '本地识别引擎：缺少 Python';
+  $('engineInfo').textContent = (s.version ? 'v' + s.version + ' · ' : '') +
+    (s.python ? '本地识别引擎：已配置' : '本地识别引擎：缺少 Python');
   if (s.settings) {
     settingsCache = s.settings;
     $('meetingChk').checked = !!s.settings.meetingPrompt;
     $('autoChk').checked = !!s.settings.autoStart;
+    $('llmBase').value = s.settings.llmBaseUrl || '';
+    $('llmModel').value = s.settings.llmModel || '';
+    $('llmState').textContent = s.settings.llmKeySet ? '已配置 API Key' : '未配置 API Key（AI 纪要需要）';
+    $('ltChk').checked = !!s.settings.liveTranslate;
+    $('ltDir').value = s.settings.liveTransDir || 'auto';
+    $('ttsUrl').value = s.settings.ttsUrl || '';
+    $('ttsRef').value = s.settings.ttsRefPath || '';
+    $('ttsPrompt').value = s.settings.ttsPrompt || '';
+    $('ttsLang').value = s.settings.ttsLang || 'zh';
+    $('ttsState').textContent = s.settings.ttsReady
+      ? '已配置，可生成配音'
+      : '未配置（需要本机 GPT-SoVITS 在跑）';
     $('consentState').textContent = s.settings.consentAccepted ? '已确认' : '未确认';
   }
   if (s.recording && s.recording.status === 'recording') {
@@ -290,6 +303,14 @@ async function pollLive() {
     box.innerHTML = escapeHtml(done) + (partial ? `<span class="partial">${escapeHtml(partial)}</span>` : '');
     if (!done && !partial) box.textContent = '（等待语音…）';
     box.scrollTop = box.scrollHeight;
+    const tBox = $('liveTrans');
+    if (l.trans) {
+      tBox.hidden = false;
+      tBox.textContent = l.trans;
+      tBox.scrollTop = tBox.scrollHeight;
+    } else {
+      tBox.hidden = true;
+    }
     setMeter($('liveFill'), l.level || 0);
     if ((l.level || 0) < 3) {
       $('liveState').textContent = '⚠️ 没有检测到声音，检查麦克风';
@@ -362,6 +383,8 @@ async function selectRec(id) {
   $('srtBtn').href = '/api/recordings/' + id + '/transcript?format=srt';
   updateExportLinks(id);
   renderTranscript(r);
+  renderSummary(r);
+  checkTTS(id);
   // 转写中/分离中则轮询刷新
   if (r.transcribing || r.diarizing) {
     setTimeout(() => { if (state.curId === id) selectRec(id); }, 2000);
@@ -474,6 +497,135 @@ async function diarize() {
     await api('/api/recordings/' + state.cur.id + '/diarize', { method: 'POST' });
     toast('已开始区分说话人');
     selectRec(state.cur.id);
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+function renderSummary(r) {
+  const box = $('summaryBox');
+  if (!r || !r.summary) {
+    box.hidden = true;
+    box.textContent = '';
+    $('summaryBtn').textContent = 'AI 纪要';
+    return;
+  }
+  box.hidden = false;
+  box.textContent = r.summary;
+  $('summaryBtn').textContent = '重新生成纪要';
+}
+
+async function summarize() {
+  if (!state.cur) return;
+  const btn = $('summaryBtn');
+  btn.disabled = true;
+  btn.textContent = '生成中…';
+  $('transcribeState').textContent = '⏳ 正在调用大模型生成纪要（约 10~30 秒）…';
+  try {
+    const res = await api('/api/recordings/' + state.cur.id + '/summary', { method: 'POST' });
+    state.cur.summary = res.summary;
+    state.cur.summaryModel = res.model;
+    renderSummary(state.cur);
+    $('transcribeState').textContent = '纪要已生成 · 模型 ' + (res.model || '-');
+    toast('纪要已生成');
+  } catch (e) {
+    toast('生成失败：' + e.message, 'err');
+    $('transcribeState').textContent = '⚠️ ' + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = state.cur && state.cur.summary ? '重新生成纪要' : 'AI 纪要';
+  }
+}
+
+async function saveLLM(clear) {
+  const body = {
+    llmBaseUrl: $('llmBase').value.trim(),
+    llmModel: $('llmModel').value.trim(),
+  };
+  if (clear) body.llmApiKey = '-';
+  else if ($('llmKey').value.trim()) body.llmApiKey = $('llmKey').value.trim();
+
+  try {
+    const s = await api('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    settingsCache = s;
+    $('llmKey').value = '';
+    $('llmState').textContent = s.llmKeySet ? '已配置 API Key' : '未配置 API Key（AI 纪要需要）';
+    toast(clear ? '已清除 API Key' : '已保存');
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function saveLiveTrans() {
+  try {
+    settingsCache = await api('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ liveTranslate: $('ltChk').checked, liveTransDir: $('ltDir').value }),
+    });
+    toast($('ltChk').checked ? '已开启实时双语（首次会加载翻译模型，约 20 秒）' : '已关闭实时双语');
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function checkTTS(id) {
+  const a = $('ttsAudio');
+  try {
+    const r = await fetch('/api/recordings/' + id + '/tts', { method: 'HEAD' });
+    if (r.ok) {
+      a.hidden = false;
+      a.src = '/api/recordings/' + id + '/tts?v=' + Date.now();
+    } else {
+      a.hidden = true;
+      a.removeAttribute('src');
+    }
+  } catch (e) {
+    a.hidden = true;
+  }
+}
+
+async function generateTTS() {
+  if (!state.cur) return;
+  const btn = $('ttsBtn');
+  btn.disabled = true;
+  btn.textContent = '合成中…';
+  $('transcribeState').textContent = '⏳ 正在用本机 GPT-SoVITS 合成（约 1:1 实时，长文本要等）…';
+  try {
+    const res = await api('/api/recordings/' + state.cur.id + '/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    const a = $('ttsAudio');
+    a.hidden = false;
+    a.src = res.url + '?v=' + Date.now();
+    a.play().catch(() => {});
+    if (res.warning) toast(res.warning, 'err');
+    else toast('配音已生成');
+    $('transcribeState').textContent = '配音已生成，可直接播放';
+  } catch (e) {
+    toast('合成失败：' + e.message, 'err');
+    $('transcribeState').textContent = '⚠️ ' + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '生成配音';
+  }
+}
+
+async function saveTTS() {
+  try {
+    const s = await api('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ttsUrl: $('ttsUrl').value.trim(),
+        ttsRefPath: $('ttsRef').value.trim(),
+        ttsPrompt: $('ttsPrompt').value.trim(),
+        ttsLang: $('ttsLang').value,
+      }),
+    });
+    settingsCache = s;
+    $('ttsState').textContent = s.ttsReady ? '已配置，可生成配音' : '未配置（需要本机 GPT-SoVITS 在跑）';
+    toast('已保存');
   } catch (e) { toast(e.message, 'err'); }
 }
 
@@ -617,5 +769,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('transcribeBtn').onclick = retranscribe;
   $('diarizeBtn').onclick = diarize;
   $('transBtn').onclick = translateSegs;
+  $('summaryBtn').onclick = summarize;
+  $('ttsBtn').onclick = generateTTS;
+  $('ttsSave').onclick = saveTTS;
+  $('llmSave').onclick = () => saveLLM(false);
+  $('llmClear').onclick = () => saveLLM(true);
+  $('ltChk').onchange = saveLiveTrans;
+  $('ltDir').onchange = saveLiveTrans;
   $('delBtn').onclick = del;
 });

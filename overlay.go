@@ -205,6 +205,7 @@ type Overlay struct {
 	hwnd      uintptr
 	text      string
 	partial   string
+	trans     string
 	level     float64
 	target    float64
 	visible   bool
@@ -215,6 +216,7 @@ type Overlay struct {
 	tracking  bool
 	fontMain  uintptr
 	fontBtn   uintptr
+	fontSub   uintptr
 	app       *App
 	onAction  func(string)
 	onHotkey  func()
@@ -234,6 +236,21 @@ func (o *Overlay) OnAction(f func(string)) {
 }
 
 // Text 更新字幕内容与电平
+// SetTrans 更新实时译文（悬浮条第二行）
+func (o *Overlay) SetTrans(s string) {
+	o.mu.Lock()
+	if o.trans == s {
+		o.mu.Unlock()
+		return
+	}
+	o.trans = s
+	hwnd := o.hwnd
+	o.mu.Unlock()
+	if hwnd != 0 {
+		pInvalidateRect.Call(hwnd, 0, 0)
+	}
+}
+
 func (o *Overlay) Text(final, partial string, level int) {
 	o.mu.Lock()
 	changed := o.text != final || o.partial != partial
@@ -454,6 +471,11 @@ func (o *Overlay) run() {
 	o.fontBtn, _, _ = gCreateFontW.Call(
 		uintptr(^uint32(0)-14), // -15
 		0, 0, 0, 500, 0, 0, 0, 1, 0, 0, 5, 0,
+		uintptr(unsafe.Pointer(mustUTF16("Microsoft YaHei UI"))),
+	)
+	o.fontSub, _, _ = gCreateFontW.Call(
+		uintptr(^uint32(0)-15), // -16
+		0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0,
 		uintptr(unsafe.Pointer(mustUTF16("Microsoft YaHei UI"))),
 	)
 
@@ -757,6 +779,7 @@ func (o *Overlay) paint(hwnd uintptr) {
 
 	o.mu.Lock()
 	text, partial, level := o.text, o.partial, o.level
+	trans := o.trans
 	st, prompt, hover := o.st, o.prompt, o.hover
 	o.mu.Unlock()
 
@@ -858,6 +881,38 @@ func (o *Overlay) paint(hwnd uintptr) {
 		}
 	}
 	gSetBkMode.Call(hdc, transparentBk)
+
+	// 实时双语：上半行原文、下半行译文；都单行显示并取尾部，避免长句挤爆
+	if trans != "" {
+		const dtSingleLine = 0x0020
+		const dtEndEllipsis = 0x00008000
+		left, right := barX+14, textRight
+		if right < left+60 {
+			right = left + 60
+		}
+
+		if o.fontMain != 0 {
+			gSelectObject.Call(hdc, o.fontMain)
+		}
+		gSetTextColor.Call(hdc, colText)
+		r1 := winRect{Left: left, Top: 6, Right: right, Bottom: H/2 + 2}
+		t1 := tailRunes(show, 64)
+		pDrawTextW.Call(hdc, uintptr(unsafe.Pointer(mustUTF16(t1))), uintptr(^uint32(0)),
+			uintptr(unsafe.Pointer(&r1)),
+			uintptr(dtSingleLine|dtEndEllipsis|dtVCenter|dtNoPrefix))
+
+		if o.fontSub != 0 {
+			gSelectObject.Call(hdc, o.fontSub)
+		}
+		gSetTextColor.Call(hdc, colClose)
+		r2 := winRect{Left: left, Top: H/2 - 2, Right: right, Bottom: H - 6}
+		t2 := tailRunes(trans, 52)
+		pDrawTextW.Call(hdc, uintptr(unsafe.Pointer(mustUTF16(t2))), uintptr(^uint32(0)),
+			uintptr(unsafe.Pointer(&r2)),
+			uintptr(dtSingleLine|dtEndEllipsis|dtVCenter|dtNoPrefix))
+		return
+	}
+
 	if o.fontMain != 0 {
 		gSelectObject.Call(hdc, o.fontMain)
 	}
