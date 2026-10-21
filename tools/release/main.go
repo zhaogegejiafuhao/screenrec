@@ -44,7 +44,12 @@ func main() {
 		fatal(err)
 	}
 	for _, f := range ship {
-		if err := copyFile(f, filepath.Join(stage, filepath.Base(f))); err != nil {
+		dst := filepath.Join(stage, filepath.FromSlash(f))
+		if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+			fmt.Fprintf(os.Stderr, "跳过 %s: %v\n", f, err)
+			continue
+		}
+		if err := copyFile(f, dst); err != nil {
 			fmt.Fprintf(os.Stderr, "跳过 %s: %v\n", f, err)
 		}
 	}
