@@ -68,7 +68,11 @@ func (a *App) clipRecording(id string, opt ClipOptions) (*Recording, error) {
 
 	now := time.Now()
 	clipID := "c" + now.Format("20060102-150405")
-	out := filepath.Join(a.recordsDir, clipID+".mp4")
+	ext := ".mp4"
+	if mode == "audio" {
+		ext = ".m4a" // 只有音轨，别硬塞进 mp4 容器里
+	}
+	out := filepath.Join(a.recordsDir, clipID+ext)
 	cut := opt.End - opt.Start
 
 	// 字幕文件放临时目录，ffmpeg 的 cwd 也切过去：
@@ -104,12 +108,16 @@ func (a *App) clipRecording(id string, opt ClipOptions) (*Recording, error) {
 	}
 
 	if opt.Burn || opt.Reencode {
-		args = append(args,
-			"-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
-			"-pix_fmt", "yuv420p",
-			"-c:a", "aac", "-b:a", "160k",
-			"-movflags", "+faststart",
-		)
+		if mode == "audio" {
+			args = append(args, "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart")
+		} else {
+			args = append(args,
+				"-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+				"-pix_fmt", "yuv420p",
+				"-c:a", "aac", "-b:a", "160k",
+				"-movflags", "+faststart",
+			)
+		}
 	} else {
 		args = append(args, "-c", "copy", "-avoid_negative_ts", "make_zero",
 			"-movflags", "+faststart")

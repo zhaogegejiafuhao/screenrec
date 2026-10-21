@@ -84,6 +84,9 @@ go build -ldflags "-H windowsgui" -o screenrec.exe .
 .\screenrec.exe
 ```
 
+> 前端（`web/index.html`、`app.js`、`style.css`）是用 `go:embed` 编进二进制的，
+> 改完要重新 `go build` 才生效——只刷新浏览器看不到变化（这一条是实测踩出来的）。
+
 ### 指定 FFmpeg / Python 的三种方式
 
 1. 放进 `PATH`（最简单）
@@ -615,6 +618,7 @@ build\setup-stub.exe -pack dist\screenrec-0.3.0-win64.zip -out dist\setup-0.3.0.
   彻底绕开 Windows 路径里 `C:` 冒号在 filtergraph 中的转义问题
 - **不勾烧录时用 `-c copy`**：只切在关键帧上，可能差个零点几秒，但 10 秒的片段 1 秒就出；
   要精确到帧就勾上烧录（走 libx264 重编码）
+- 录音记录剪出来是 `.m4a`，不硬塞进 mp4 容器；视频记录才是 `.mp4`
 
 样式用 `force_style`：微软雅黑 20 号、白字黑边、底部 28px 边距。
 

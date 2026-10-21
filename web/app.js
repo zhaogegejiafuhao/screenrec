@@ -378,6 +378,11 @@ async function selectRec(id) {
   if (r.sysWarning) toast(r.sysWarning, 'err');
   $('player').src = '/api/recordings/' + id + '/media';
   resetClipUI(r);
+  // 记录多的时候详情在列表下方很远，选中后直接滚过去，不然像是"点了没反应"
+  const det = $('detail');
+  if (det.getBoundingClientRect().top > window.innerHeight * 0.6) {
+    det.scrollIntoView({ block: 'start' });
+  }
   renderParts(r, id);
   $('transBtn').textContent = r.translateDir ? '重新翻译' : '翻译字幕';
   $('txtBtn').href = '/api/recordings/' + id + '/transcript?format=txt';
