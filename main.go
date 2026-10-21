@@ -180,6 +180,9 @@ func watchOverlay(app *App) {
 			if !app.overlay.IsDismissed() {
 				app.mu.RLock()
 				text, partial, level, trans := rec.LiveText, rec.LivePartial, rec.LiveLevel, rec.LiveTrans
+				if rec.LiveSysLevel > level {
+					level = rec.LiveSysLevel // 只看视频不说话时，电平条跟着电脑声音跳
+				}
 				app.mu.RUnlock()
 				app.overlay.SetTrans(trans)
 				app.overlay.Text(tailRunes(text, 90), partial, level)

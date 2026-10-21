@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,6 +29,7 @@ type Segment struct {
 	Text    string  `json:"text"`
 	Trans   string  `json:"trans,omitempty"`   // 译文（双语字幕）
 	Speaker int     `json:"speaker,omitempty"` // 1 起，0 表示未区分
+	Source  string  `json:"src,omitempty"`     // mic / sys：实时阶段区分麦克风与电脑声音
 }
 
 // Recording 一次录制
@@ -59,6 +61,7 @@ type Recording struct {
 	LiveTrans   string     `json:"liveTrans,omitempty"`
 	LiveDir     string     `json:"-"`
 	LiveLevel   int        `json:"liveLevel"`
+	LiveSysLevel int       `json:"liveSysLevel,omitempty"` // 电脑声音的电平（实时字幕用）
 	Encoder     string     `json:"encoder,omitempty"`
 	Transcribed bool       `json:"transcribed"`
 	Transcribing bool      `json:"transcribing"`
@@ -278,6 +281,10 @@ func (r *Recorder) Start(opt StartOptions) (*Recording, error) {
 
 	go r.waitExit(rec, waitCh)
 	go r.liveLoop(rec, pcmFile, r.liveStop)
+	// 电脑正在播放的声音也进实时字幕：否则看视频/刷抖音时字幕条一直是空的
+	if opt.SystemAudio && lb != nil {
+		go r.sysLiveLoop(rec, sysFile, leadMs, r.liveStop)
+	}
 	return rec, nil
 }
 
@@ -454,6 +461,7 @@ func (r *Recorder) waitExit(rec *Recording, waitCh chan error) {
 		rec.DurationMs = int64(now.Sub(rec.StartedAt).Milliseconds())
 	}
 	rec.LiveLevel = 0
+	rec.LiveSysLevel = 0
 	r.app.mu.Unlock()
 	r.save(rec)
 
@@ -645,14 +653,165 @@ func (r *Recorder) liveLoop(rec *Recording, pcmPath string, stop chan struct{}) 
 	}
 }
 
-// appendLive 追加实时转写，裁掉与上一条重叠的文字（调用方需持锁）
+// sysLiveLoop 把「电脑正在播放的声音」也送进实时字幕。
+// 走 2.5 秒分块而不是流式：流式引擎只有一路，已经给麦克风用了；
+// 回环 PCM 是 48k 立体声，先降采样成识别引擎要的 16k 单声道再喂。
+func (r *Recorder) sysLiveLoop(rec *Recording, sysPath string, leadMs int64, stop chan struct{}) {
+	const srcBytesPerSec = loopRate * loopCh * 2 // 回环原始格式：48k / 立体声 / 16bit
+	const quantum = srcBytesPerSec / 5           // 0.2 秒一个能量判断窗口
+	const sysSpeechRMS = 300.0                  // 有没有人声的粗略门限
+	offsetSec := -float64(leadMs) / 1000
+
+	liveOn, liveDirCfg := false, "auto"
+	if r.app.set != nil {
+		liveOn, liveDirCfg = r.app.set.LiveTransConfig()
+	}
+
+	var f *os.File
+	for i := 0; i < 40; i++ {
+		ff, err := os.Open(sysPath)
+		if err == nil {
+			f = ff
+			break
+		}
+		select {
+		case <-stop:
+			return
+		case <-time.After(150 * time.Millisecond):
+		}
+	}
+	if f == nil {
+		return
+	}
+	defer f.Close()
+
+	readAt := func(off, n int64) []byte {
+		b := make([]byte, n)
+		if _, err := f.ReadAt(b, off); err != nil {
+			return nil
+		}
+		return b
+	}
+
+	consumed := int64(0)
+	utterStart := int64(0)
+	var speechBytes, silenceBytes int64
+	ticker := time.NewTicker(400 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+		}
+		st, err := f.Stat()
+		if err != nil {
+			continue
+		}
+		size := st.Size()
+
+		if size >= 19200 {
+			if lb := readAt(size-19200, 19200); lb != nil {
+				lv, _ := liveLevel(lb)
+				r.app.mu.Lock()
+				if rec.Status == "recording" {
+					rec.LiveSysLevel = lv
+				}
+				r.app.mu.Unlock()
+			}
+		}
+
+		// 一次 tick 尽量把积压的窗口处理完，处理速度要跟得上实时
+		for size-consumed >= quantum {
+			q := readAt(consumed, quantum)
+			if q == nil {
+				break
+			}
+			consumed += quantum
+			if pcmRMS(q) >= sysSpeechRMS {
+				speechBytes += quantum
+				silenceBytes = 0
+			} else {
+				silenceBytes += quantum
+			}
+			// 还没听到人声：把起点跟着走，别把长段静音算进第一句
+			if speechBytes == 0 {
+				utterStart = consumed
+				continue
+			}
+
+			cut, endByte := false, consumed
+			switch {
+			case speechBytes >= int64(srcBytesPerSec*0.35) && silenceBytes >= int64(srcBytesPerSec*0.45):
+				// 说完一小段且停顿了：按语义边界切，比固定 2.5 秒切出来的句子完整
+				endByte = consumed - silenceBytes
+				cut = true
+			case consumed-utterStart >= int64(srcBytesPerSec*5):
+				cut = true // 一直说不停，最多攒 5 秒（再长字幕就一行行憋着了）
+			}
+			if !cut {
+				continue
+			}
+			seg := readAt(utterStart, endByte-utterStart)
+			hadSpeech := speechBytes >= int64(srcBytesPerSec*0.3)
+			s := offsetSec + float64(utterStart)/srcBytesPerSec
+			e := offsetSec + float64(endByte)/srcBytesPerSec
+			utterStart, speechBytes, silenceBytes = consumed, 0, 0
+			if !hadSpeech || seg == nil || e <= 0 {
+				continue
+			}
+			if s < 0 {
+				s = 0
+			}
+			text, err := r.app.asr.Decode(downmix48kStereo(seg))
+			if err != nil || strings.TrimSpace(text) == "" {
+				continue
+			}
+			r.app.mu.Lock()
+			if rec.Status == "recording" {
+				appendLiveSrc(rec, s, e, text, "sys")
+			}
+			r.app.mu.Unlock()
+			r.translateAsync(rec, text, liveOn, liveDirCfg)
+		}
+	}
+}
+
+// appendLive 追加实时转写（麦克风），裁掉与上一条重叠的文字（调用方需持锁）
 func appendLive(rec *Recording, start, end float64, text string) {
+	appendLiveSrc(rec, start, end, text, "mic")
+}
+
+// appendLiveSrc 按来源追加实时转写（调用方需持锁）
+func appendLiveSrc(rec *Recording, start, end float64, text, src string) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return
 	}
-	if n := len(rec.Segments); n > 0 {
-		prev := []rune(rec.Segments[n-1].Text)
+	// 外放时同一句话会先被回环收到、再被麦克风收一遍：近似文本直接丢掉
+	for i := len(rec.Segments) - 1; i >= 0; i-- {
+		s := rec.Segments[i]
+		if s.Source == src {
+			continue
+		}
+		if start-s.End > 6 || s.Start-end > 6 {
+			continue
+		}
+		if textSimilar(s.Text, text) >= 0.62 {
+			return
+		}
+	}
+	// 同源分块之间有 0.3 秒重叠，开头会重复上一段的尾巴
+	for i := len(rec.Segments) - 1; i >= 0; i-- {
+		s := rec.Segments[i]
+		if s.Source != src {
+			continue
+		}
+		if start-s.End > 5 {
+			break
+		}
+		prev := []rune(s.Text)
 		cur := []rune(text)
 		maxL := len(prev)
 		if maxL > 12 {
@@ -664,12 +823,75 @@ func appendLive(rec *Recording, start, end float64, text string) {
 				break
 			}
 		}
+		break
 	}
 	if text == "" {
 		return
 	}
-	rec.Segments = append(rec.Segments, Segment{Start: round2(start), End: round2(end), Text: text})
+	rec.Segments = append(rec.Segments, Segment{Start: round2(start), End: round2(end), Text: text, Source: src})
 	rec.LiveText = joinText(rec.Segments)
+}
+
+// downmix48kStereo 把 48k/立体声/16bit 的回环 PCM 降成 16k 单声道。
+// 直接每 3 帧取 1 帧会有混叠，这里先做 3 点均值当低通，够识别用且几乎不花时间。
+func downmix48kStereo(buf []byte) []byte {
+	frames := len(buf) / 4
+	out := make([]byte, 0, frames/3*2)
+	for i := 0; i+2 < frames; i += 3 {
+		var sum int32
+		for k := 0; k < 3; k++ {
+			o := (i + k) * 4
+			l := int32(int16(binary.LittleEndian.Uint16(buf[o:])))
+			r := int32(int16(binary.LittleEndian.Uint16(buf[o+2:])))
+			sum += (l + r) / 2
+		}
+		v := uint16(int16(sum / 3))
+		out = append(out, byte(v), byte(v>>8))
+	}
+	return out
+}
+
+// textSimilar 字符二元组 Jaccard 相似度，用来判断两路字幕是不是同一句话
+func textSimilar(a, b string) float64 {
+	ra := []rune(strings.Join(strings.Fields(a), ""))
+	rb := []rune(strings.Join(strings.Fields(b), ""))
+	if len(ra) < 2 || len(rb) < 2 {
+		if string(ra) == string(rb) {
+			return 1
+		}
+		return 0
+	}
+	grams := func(r []rune) map[string]int {
+		m := make(map[string]int, len(r))
+		for i := 0; i+1 < len(r); i++ {
+			m[string(r[i:i+2])]++
+		}
+		return m
+	}
+	ma, mb := grams(ra), grams(rb)
+	inter, union := 0, 0
+	for g, n := range ma {
+		if m, ok := mb[g]; ok {
+			if m < n {
+				inter += m
+				union += n
+			} else {
+				inter += n
+				union += m
+			}
+			continue
+		}
+		union += n
+	}
+	for g, n := range mb {
+		if _, ok := ma[g]; !ok {
+			union += n
+		}
+	}
+	if union == 0 {
+		return 0
+	}
+	return float64(inter) / float64(union)
 }
 
 func round2(f float64) float64 {

@@ -11,6 +11,8 @@ labels speakers, translates bilingual subtitles, and exports meeting notes to Ma
 - **Window capture** by HWND — works even when the window is covered
 - **System audio** via WASAPI loopback, including **process-level loopback** so it works with Bluetooth headphones
 - **Live subtitles** (streaming Paraformer draft, ~0.3s) corrected by SenseVoice at each sentence boundary
+- **System audio in the live captions**: loopback PCM is downsampled to 16k mono and cut on energy endpoints,
+  so videos / calls played on the machine are captioned too, with cross-source echo suppression
 - **Speaker diarization** (pyannote segmentation + 3D-Speaker embeddings)
 - **Bilingual subtitles** with a fully offline MarianMT model, plus a glossary that keeps technical terms intact
 - **Export** to Markdown / Word (hand-written OOXML, no dependencies), with optional spoken-math → `x² + y² = c²` normalization
@@ -32,14 +34,13 @@ labels speakers, translates bilingual subtitles, and exports meeting notes to Ma
 ## Quick start
 
 ```powershell
-# 1. download models (~1.1 GB)
-powershell -ExecutionPolicy Bypass -File scripts\fetch-models.ps1
+# easiest: single-file installer (per-user, no admin rights, shortcuts + uninstall entry)
+.\setup-0.2.0.exe
 
-# 2. build
-go build -ldflags "-H windowsgui" -o screenrec.exe .
-
-# 3. run — tray icon appears, browser opens http://127.0.0.1:8790
-.\screenrec.exe
+# or from source
+powershell -ExecutionPolicy Bypass -File scripts\fetch-models.ps1   # 1. models (~1.1 GB)
+go build -ldflags "-H windowsgui" -o screenrec.exe .                # 2. build
+.\screenrec.exe                                                     # 3. run
 ```
 
 FFmpeg / Python are found in this order: `PATH` → `SCREENREC_FFMPEG` / `SCREENREC_PYTHON`
