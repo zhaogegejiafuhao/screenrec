@@ -1,0 +1,52 @@
+# screenrec
+
+A local-first screen recorder and meeting transcriber for Windows — **no cloud, no account, no telemetry**.
+
+Records screen / a single window / microphone / system audio, transcribes with SenseVoice,
+labels speakers, translates bilingual subtitles, and exports meeting notes to Markdown or Word.
+
+## Features
+
+- **Screen capture** via DXGI Desktop Duplication (`ddagrab`); falls back to `gdigrab`
+- **Window capture** by HWND — works even when the window is covered
+- **System audio** via WASAPI loopback, including **process-level loopback** so it works with Bluetooth headphones
+- **Live subtitles** (streaming Paraformer draft, ~0.3s) corrected by SenseVoice at each sentence boundary
+- **Speaker diarization** (pyannote segmentation + 3D-Speaker embeddings)
+- **Bilingual subtitles** with a fully offline MarianMT model, plus a glossary that keeps technical terms intact
+- **Export** to Markdown / Word (hand-written OOXML, no dependencies), with optional spoken-math → `x² + y² = c²` normalization
+- **Meeting reminder** when a known conferencing app starts using the microphone
+- **Tray app**: no console window, autostart, global hotkey `Ctrl+Alt+Space`
+- Single 12MB Go binary + Python sidecars. No third-party Go modules.
+
+## Requirements
+
+- Windows 10 2004+ (process loopback needs this version)
+- Go 1.22+
+- FFmpeg 6.0+ with `dshow`, `gdigrab`, `ddagrab`
+- Python 3.9–3.11 with `sherpa-onnx numpy soundcard torch transformers sentencepiece`
+- ~1.1GB of model weights (not bundled)
+
+## Quick start
+
+```powershell
+# 1. download models (~1.1 GB)
+powershell -ExecutionPolicy Bypass -File scripts\fetch-models.ps1
+
+# 2. build
+go build -ldflags "-H windowsgui" -o screenrec.exe .
+
+# 3. run — tray icon appears, browser opens http://127.0.0.1:8790
+.\screenrec.exe
+```
+
+FFmpeg / Python are found in this order: `PATH` → `SCREENREC_FFMPEG` / `SCREENREC_PYTHON`
+environment variables → `ffmpeg\bin\` and `runtime\` next to the exe.
+
+## Documentation
+
+The full documentation is currently in Chinese: [README.md](README.md).
+
+## License
+
+MIT — see [LICENSE](LICENSE). Third-party components and model licenses: [THIRD_PARTY.md](THIRD_PARTY.md).
+Model weights are **not** included in this repository.

@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>录屏工坊 — 屏幕录制 + 本地语音转文字</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header>
+  <div class="logo">🎬 录屏工坊 <span class="sub">屏幕录制 · 本地语音转文字</span></div>
+  <div class="status">
+    <span id="pill" class="pill">检测环境…</span>
+  </div>
+</header>
+
+<main>
+  <!-- 左：录制设置 -->
+  <aside>
+    <div class="mode-tabs">
+      <button class="tab active" data-mode="screen">录屏</button>
+      <button class="tab" data-mode="window">窗口</button>
+      <button class="tab" data-mode="audio">录音</button>
+    </div>
+
+    <label id="screenRow">显示器
+      <select id="screenSel"></select>
+    </label>
+
+    <div id="windowRow" hidden>
+      <label>选择窗口
+        <select id="winSel"></select>
+      </label>
+      <button id="winRefresh" class="btn small">刷新窗口列表</button>
+    </div>
+
+    <label>麦克风
+      <select id="micSel"></select>
+    </label>
+
+    <label>系统声音（电脑里播放的声音）
+      <select id="sysSel">
+        <option value="">不录制</option>
+      </select>
+    </label>
+    <div id="sysHint" class="muted small">
+      开会时选上它，对方的声音才能录进来。蓝牙耳机多数不支持回环，录不到就换成内置扬声器或有线耳机。
+    </div>
+
+    <div class="mic-test">
+      <button id="micTestBtn" class="btn small">🎤 检测麦克风电平</button>
+      <div class="meter"><div id="micFill"></div></div>
+      <div id="micAdvice" class="muted"></div>
+    </div>
+
+    <div class="row2">
+      <label id="fpsRow">帧率
+        <select id="fpsSel">
+          <option value="30">30 fps</option>
+          <option value="60">60 fps</option>
+        </select>
+      </label>
+      <label id="crfRow">画质
+        <select id="crfSel">
+          <option value="20">高清</option>
+          <option value="23" selected>标准</option>
+          <option value="28">省空间</option>
+        </select>
+      </label>
+    </div>
+
+    <label>麦克风增益补偿
+      <select id="gainSel">
+        <option value="0">不处理</option>
+        <option value="6">+6 dB</option>
+        <option value="12">+12 dB</option>
+        <option value="18">+18 dB（推荐给小音量麦克风）</option>
+        <option value="24">+24 dB</option>
+        <option value="30">+30 dB</option>
+      </select>
+    </label>
+
+    <label id="segRow">自动分段（长时间录制）
+      <select id="segSel">
+        <option value="0">不分段</option>
+        <option value="30">每 30 分钟一个文件</option>
+        <option value="60">每 60 分钟一个文件</option>
+      </select>
+    </label>
+
+    <details class="hint">
+      <summary>录不到电脑内部声音？</summary>
+      <p>Windows 默认只允许采集麦克风。要录系统播放的声音（网课、会议、视频），需要：</p>
+      <p>① 在「声音设置 → 更多声音设置 → 录制」里启用<b>立体声混音</b>；或</p>
+      <p>② 安装免费的 <b>VB-CABLE</b> 虚拟声卡，把系统输出设为 CABLE Input，然后在上面「麦克风」里选 CABLE Output。</p>
+      <p>装好后设备会出现在下拉列表中，无需改代码。</p>
+    </details>
+
+    <button id="recBtn" class="btn record">● 开始录制</button>
+
+    <div id="liveBox" hidden>
+      <div class="live-head">
+        <span class="dot"></span><span id="timer">00:00</span>
+        <span id="liveState" class="muted">实时转写中…</span>
+      </div>
+      <div class="meter live"><div id="liveFill"></div></div>
+      <div id="liveText" class="live-text"></div>
+    </div>
+
+    <div class="foot">
+      <button id="overlayBtn" class="btn small">🪟 显示 / 隐藏悬浮字幕</button>
+      <label class="chk"><input type="checkbox" id="meetingChk" checked><span>开会时自动提醒</span></label>
+      <label class="chk"><input type="checkbox" id="autoChk"><span>开机自动启动</span></label>
+      <div class="muted small">Ctrl+Alt+Space 开始 / 停止 · 拖悬浮条左侧圆点可移动</div>
+      <div class="muted small">
+        录音授权 <span id="consentState">已确认</span>
+        <a href="#" id="resetConsent" class="link">重新确认</a>
+        · <a href="#" id="resetOverlayPos" class="link">复位位置</a>
+      </div>
+      <span id="engineInfo" class="muted small"></span>
+    </div>
+  </aside>
+
+  <!-- 右：记录列表 + 详情 -->
+  <section id="panel">
+    <div class="list-head">
+      <h2>录制记录</h2>
+      <span id="count" class="muted"></span>
+    </div>
+    <ul id="recList" class="rec-list"></ul>
+
+    <div id="detail" hidden>
+      <div class="detail-head">
+        <h2 id="dTitle"></h2>
+        <div class="row">
+          <button id="renameBtn" class="btn small">改名</button>
+          <button id="transcribeBtn" class="btn small">重新转写</button>
+          <button id="diarizeBtn" class="btn small">区分说话人</button>
+          <button id="transBtn" class="btn small">翻译字幕</button>
+          <a id="txtBtn" class="btn small" download>导出 TXT</a>
+          <a id="srtBtn" class="btn small" download>导出 SRT</a>
+          <label class="chk inline" title="把口语数学表达整理成符号：x²、∫₀^∞、O(n²)">
+            <input type="checkbox" id="mathChk"> 公式整理
+          </label>
+          <a id="mdBtn" class="btn small" download>导出 Markdown</a>
+          <a id="docxBtn" class="btn small primary" download>导出 Word</a>
+          <button id="delBtn" class="btn small danger">删除</button>
+        </div>
+      </div>
+      <div id="dMeta" class="muted"></div>
+      <div id="partRow" class="row" hidden>
+        <span class="muted">分段：</span>
+        <div id="partBtns" class="row"></div>
+      </div>
+      <video id="player" controls playsinline></video>
+      <div id="transcribeState" class="muted"></div>
+      <div id="segments" class="segments"></div>
+      <div id="plainText" class="plain" hidden></div>
+    </div>
+
+    <div id="empty" class="empty">
+      <div class="empty-icon">🎥</div>
+      <p>还没有录制记录</p>
+      <p class="muted">点左侧「开始录制」，停止后会自动转写</p>
+    </div>
+  </section>
+</main>
+
+<div id="toast"></div>
+
+<!-- 首次录音前的授权确认 -->
+<div id="consent" class="modal" hidden>
+  <div class="modal-card">
+    <h3>录音授权确认</h3>
+    <div class="modal-body">
+      <p>开始录音前，请确认：</p>
+      <ul>
+        <li>你已取得对话中相关人员的录音同意</li>
+        <li>录音仅用于你自己的合法用途，不侵犯他人隐私</li>
+        <li>生成的文字与音频不会用于冒充他人或误导传播</li>
+      </ul>
+      <p class="muted">《个人信息保护法》规定，处理他人语音等个人信息应当取得单独同意；未经同意录制他人对话，可能需要承担法律责任。</p>
+    </div>
+    <div class="modal-foot">
+      <button id="consentCancel" class="btn small">取消</button>
+      <button id="consentOk" class="btn small primary">我已知悉并同意</button>
+    </div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

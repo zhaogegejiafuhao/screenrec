@@ -1,0 +1,47 @@
+# ---- 运行数据（含个人录音与转写，绝不入库）----
+/data/
+*.log
+
+# ---- 模型权重（用 scripts/fetch-models.ps1 下载）----
+/models/*
+!/models/README.md
+
+# ---- Python 依赖与虚拟环境 ----
+/pylibs/
+/venv/
+__pycache__/
+*.pyc
+
+# ---- 测试素材（合成音、录制样片）----
+/test_audio/
+/testdata/
+*.pcm
+
+# ---- 构建产物 ----
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/build/
+/dist/
+
+# ---- 媒体与截图 ----
+*.wav
+*.mp3
+*.mp4
+*.m4a
+*.mkv
+*.png
+*.jpg
+*.jpeg
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 允许把 ffmpeg / python 直接放在 exe 同目录（README 里的第三种方式）
+/ffmpeg/
+/runtime/

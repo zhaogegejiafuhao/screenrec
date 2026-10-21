@@ -1,0 +1,21 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: Build
+        run: go build -o screenrec.exe .
+      - name: Vet
+        run: go vet ./...
+
+  # 说明：识别流程的测试依赖 SenseVoice / Paraformer 模型与真实麦克风，
+  # 无法在 CI 里跑；这里只保证「能编译、能过静态检查」。

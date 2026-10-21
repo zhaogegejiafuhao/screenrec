@@ -1,0 +1,11 @@
+[
+  "Transformer",
+  "Attention",
+  "Embedding",
+  "Prompt",
+  "Agent",
+  "Fine-tuning",
+  "Inference",
+  "Tokenizer",
+  "Checkpoint"
+]
