@@ -133,6 +133,28 @@
         <div id="llmState" class="muted small"></div>
       </details>
       <details class="cfg">
+        <summary>日历自动录制</summary>
+        <label class="chk"><input type="checkbox" id="calChk"><span>按日程到点提醒 / 自动录制</span></label>
+        <input id="calSrc" type="text" placeholder="留空=本机 Outlook；也可填 .ics 路径或订阅链接">
+        <div class="row">
+          <span class="muted small">提前</span>
+          <input id="calLead" class="mini" type="number" min="0" max="60" step="1" value="2">
+          <span class="muted small">分钟</span>
+          <select id="calMode" class="mini">
+            <option value="audio">录音频</option>
+            <option value="screen">录屏幕</option>
+          </select>
+        </div>
+        <label class="chk"><input type="checkbox" id="calAutoChk"><span>到点直接开录（不弹提示）</span></label>
+        <label class="chk"><input type="checkbox" id="calStopChk" checked><span>日程结束后自动停止（宽限 5 分钟）</span></label>
+        <div class="row">
+          <button id="calSave" class="btn small primary">保存</button>
+          <button id="calRefresh" class="btn small">刷新日程</button>
+        </div>
+        <div id="calState" class="muted small"></div>
+        <ul id="calList" class="cal-list"></ul>
+      </details>
+      <details class="cfg">
         <summary>配音设置（声音克隆）</summary>
         <input id="ttsUrl" type="text" placeholder="GPT-SoVITS 地址 http://127.0.0.1:9880">
         <input id="ttsRef" type="text" placeholder="参考音频绝对路径，如 D:\voices\me.wav">

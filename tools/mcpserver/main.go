@@ -22,7 +22,7 @@ import (
 var (
 	baseURL   = "http://127.0.0.1:8790"
 	httpCli   = &http.Client{Timeout: 120 * time.Second}
-	serverVer = "0.3.0"
+	serverVer = "0.4.0"
 )
 
 type rpcReq struct {
@@ -209,6 +209,16 @@ func toolDefs() []map[string]any {
 				"required": []string{"id", "start", "end"},
 			},
 		},
+		{
+			"name":        "today_agenda",
+			"description": "列出今天剩下的日程（需先在设置里开启日历并配好数据源）。",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"refresh": map[string]any{"type": "boolean", "description": "是否先重新拉取日历，默认 false"},
+				},
+			},
+		},
 	}
 }
 
@@ -228,6 +238,8 @@ func callTool(name string, args map[string]any) (string, bool) {
 		return toolActions(args)
 	case "clip_recording":
 		return toolClip(args)
+	case "today_agenda":
+		return toolAgenda(args)
 	}
 	return "未知工具：" + name, true
 }
@@ -504,6 +516,60 @@ func toolActions(args map[string]any) (string, bool) {
 			due = "未指定"
 		}
 		fmt.Fprintf(&b, "- [ ] %s（负责人：%s / 时间：%s / %s）\n", it.Text, owner, due, mmss(int64(it.At*1000)))
+	}
+	return b.String(), false
+}
+
+func toolAgenda(args map[string]any) (string, bool) {
+	if boolArg(args, "refresh", false) {
+		if _, err := apiPost("/api/calendar/refresh", nil); err != nil {
+			return err.Error(), true
+		}
+	}
+	body, err := apiGet("/api/calendar")
+	if err != nil {
+		return err.Error(), true
+	}
+	var r struct {
+		Enabled bool `json:"enabled"`
+		Events  []struct {
+			Title   string  `json:"title"`
+			Start   string  `json:"start"`
+			End     string  `json:"end"`
+			InSec   int     `json:"inSec"`
+			Fired   bool    `json:"fired"`
+			JoinURL string  `json:"joinUrl"`
+		} `json:"events"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(body, &r); err != nil {
+		return "解析日程失败", true
+	}
+	if !r.Enabled {
+		return "日历自动录制还没开启：网页左下角「日历自动录制」里打开并填数据源（留空=本机 Outlook）。", false
+	}
+	if r.Error != "" {
+		return "读取日历失败：" + r.Error, false
+	}
+	if len(r.Events) == 0 {
+		return "今天剩下的时间里没有日程。", false
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "今天还剩 %d 条日程：\n\n", len(r.Events))
+	for _, e := range r.Events {
+		st, _ := time.Parse(time.RFC3339, e.Start)
+		en, _ := time.Parse(time.RFC3339, e.End)
+		mark := ""
+		if e.InSec < 0 {
+			mark = "（进行中）"
+		} else if e.Fired {
+			mark = "（已提醒）"
+		}
+		fmt.Fprintf(&b, "- %s–%s %s%s", st.Format("15:04"), en.Format("15:04"), e.Title, mark)
+		if e.JoinURL != "" {
+			fmt.Fprintf(&b, "\n  入会：%s", e.JoinURL)
+		}
+		b.WriteString("\n")
 	}
 	return b.String(), false
 }

@@ -128,6 +128,10 @@ func main() {	setupDPI()
 	go app.meeting.Loop(stopMeeting)
 	defer close(stopMeeting)
 
+	stopCalendar := make(chan struct{})
+	go app.calendar.Loop(stopCalendar)
+	defer close(stopCalendar)
+
 	srv := &http.Server{
 		Addr:    fmt.Sprintf("%s:%d", *addr, *port),
 		Handler: app.routes(),
@@ -195,6 +199,17 @@ func watchOverlay(app *App) {
 			if prev != "consent" {
 				app.overlay.SetVisible(true)
 				prev = "consent"
+			}
+			continue
+		}
+
+		// 日历提醒优先于会议提醒：它是提前约好的，比事后检测更可信
+		if p := app.calendar.Pending(); p != "" {
+			key := "cal:" + p
+			if prev != key {
+				app.overlay.SetPrompt(p)
+				app.overlay.SetVisible(true)
+				prev = key
 			}
 			continue
 		}

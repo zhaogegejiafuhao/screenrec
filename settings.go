@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"unsafe"
 )
@@ -36,6 +37,14 @@ type Settings struct {
 	// 实时双语字幕
 	LiveTranslate bool   `json:"liveTranslate"`
 	LiveTransDir  string `json:"liveTransDir"` // auto / en2zh / zh2en
+
+	// 日历到点自动录制
+	CalEnabled   bool   `json:"calEnabled"`   // 总开关，默认关
+	CalSource    string `json:"calSource"`    // 空或 outlook=本机 Outlook；http(s) 订阅链接；本地 .ics 路径
+	CalLeadMin   int    `json:"calLeadMin"`   // 提前几分钟提醒，默认 2
+	CalAutoStart bool   `json:"calAutoStart"` // 到点直接开录（不弹提示），默认关
+	CalAutoStop  bool   `json:"calAutoStop"`  // 日程结束时间后自动停，默认开
+	CalMode      string `json:"calMode"`      // audio / screen / 空=沿用上次
 
 	// 声音克隆（对接 GPT-SoVITS 的 HTTP API）
 	TTSURL     string `json:"ttsUrl"`     // 例如 http://127.0.0.1:9880
@@ -81,6 +90,30 @@ func (s *Settings) HasLLMKey() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.LLMAPIKey != ""
+}
+
+// CalendarConfig 返回日历相关配置（enabled, source, leadMin, autoStart, autoStop, mode）
+func (s *Settings) CalendarConfig() (bool, string, int, bool, bool, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	lead := s.CalLeadMin
+	if lead <= 0 {
+		lead = 2
+	}
+	return s.CalEnabled, s.CalSource, lead, s.CalAutoStart, s.CalAutoStop, s.CalMode
+}
+
+// SetCalendar 保存日历配置
+func (s *Settings) SetCalendar(enabled bool, source string, leadMin int, autoStart, autoStop bool, mode string) {
+	s.mu.Lock()
+	s.CalEnabled = enabled
+	s.CalSource = strings.TrimSpace(source)
+	s.CalLeadMin = leadMin
+	s.CalAutoStart = autoStart
+	s.CalAutoStop = autoStop
+	s.CalMode = mode
+	s.mu.Unlock()
+	s.save()
 }
 
 func (s *Settings) LiveTransConfig() (bool, string) {

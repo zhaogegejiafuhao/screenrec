@@ -110,6 +110,8 @@ type StartOptions struct {
 	// 同时录制「电脑正在播放的声音」（WASAPI 回环），与麦克风实时混音
 	SystemAudio bool   `json:"systemAudio"`
 	SysDevice   string `json:"sysDevice"`
+	// 自定义标题（日历自动录制时用日程名），空则按时间生成
+	Title string `json:"title,omitempty"`
 }
 
 func (r *Recorder) Current() *Recording {
@@ -251,9 +253,13 @@ func (r *Recorder) Start(opt StartOptions) (*Recording, error) {
 		return nil, fmt.Errorf("录制启动失败：%s", lastErr)
 	}
 
+	title := strings.TrimSpace(opt.Title)
+	if title == "" {
+		title = defaultTitle(opt.Mode, now)
+	}
 	rec := &Recording{
 		ID:        id,
-		Title:     defaultTitle(opt.Mode, now),
+		Title:     title,
 		Mode:      opt.Mode,
 		File:      outFile,
 		PCMFile:   pcmFile,

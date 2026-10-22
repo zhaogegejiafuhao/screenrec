@@ -20,6 +20,8 @@ labels speakers, translates bilingual subtitles, and exports meeting notes to Ma
 - **Live bilingual subtitles**: each finished sentence is translated locally (~0.3s warm) and shown as a second line
 - **Voice cloning voice-over** (optional): calls a local GPT-SoVITS server to read the transcript in your own voice
 - **Meeting reminder** when a known conferencing app starts using the microphone
+- **Calendar-triggered recording**: reads ICS (local Outlook, a `.ics` file, or a subscription URL),
+  prompts ahead of the start time — or starts recording on its own and stops when the event ends
 - **Tray app**: no console window, autostart, global hotkey `Ctrl+Alt+Space`
 - Single 12MB Go binary + Python sidecars. No third-party Go modules.
 
@@ -35,7 +37,7 @@ labels speakers, translates bilingual subtitles, and exports meeting notes to Ma
 
 ```powershell
 # easiest: single-file installer (per-user, no admin rights, shortcuts + uninstall entry)
-.\setup-0.3.0.exe
+.\setup-0.4.0.exe
 
 # or from source
 powershell -ExecutionPolicy Bypass -File scripts\fetch-models.ps1   # 1. models (~1.1 GB)

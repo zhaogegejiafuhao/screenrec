@@ -25,6 +25,7 @@ type App struct {
 	overlay    *Overlay
 	set        *Settings
 	meeting    *MeetingWatcher
+	calendar   *CalendarWatcher
 	loopMu     sync.Mutex
 	loopDevs   []string
 	loopAt     time.Time
@@ -74,6 +75,7 @@ func NewApp(dataDir, assets string) (*App, error) {
 	a.overlay = NewOverlay()
 	a.recorder = NewRecorder(a)
 	a.meeting = NewMeetingWatcher(a)
+	a.calendar = NewCalendarWatcher(a)
 	a.overlay.OnAction(a.overlayAction)
 	a.loadRecordings()
 	return a, nil
@@ -95,6 +97,7 @@ func (a *App) startRecording(opt StartOptions) (*Recording, error) {
 	}
 	a.put(rec)
 	a.meeting.Clear()
+	a.calendar.Clear()
 	a.overlay.SetRecording()
 	a.overlay.SetVisible(true)
 	return rec, nil
@@ -135,6 +138,11 @@ func (a *App) flashPrompt(msg string) {
 func (a *App) overlayAction(id string) {
 	switch id {
 	case "start":
+		// 日历提醒优先：它带标题，「开始」要用日程名当录制标题
+		if a.calendar.Pending() != "" {
+			a.calendar.Accept()
+			return
+		}
 		a.requestStart()
 	case "consent":
 		a.set.AcceptConsent()
@@ -147,6 +155,10 @@ func (a *App) overlayAction(id string) {
 	case "stop":
 		a.stopRecording()
 	case "ignore":
+		// 日历提示点了忽略就只跳过这一次；会议提示按应用静默半小时
+		if a.calendar.Pending() != "" {
+			a.calendar.Snooze()
+		}
 		a.meeting.Snooze(30 * time.Minute)
 		a.overlay.SetIdle()
 	case "mute":
@@ -155,7 +167,10 @@ func (a *App) overlayAction(id string) {
 		}
 		a.overlay.SetIdle()
 	case "close":
-		// 关闭时如果正有一条会议提醒，一并静默，避免关闭后立刻又弹回来
+		// 关闭时如果正有一条提醒，一并静默，避免关闭后立刻又弹回来
+		if a.calendar.Pending() != "" {
+			a.calendar.Snooze()
+		}
 		if a.meeting.Pending() != "" {
 			a.meeting.Snooze(30 * time.Minute)
 		}

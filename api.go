@@ -61,6 +61,8 @@ func (a *App) routes() http.Handler {
 	mux.HandleFunc("POST /api/recordings/{id}/summary", a.handleSummary)
 	mux.HandleFunc("POST /api/recordings/{id}/clip", a.handleClip)
 	mux.HandleFunc("GET /api/recordings/{id}/actions", a.handleActions)
+	mux.HandleFunc("GET /api/calendar", a.handleCalendar)
+	mux.HandleFunc("POST /api/calendar/refresh", a.handleCalendarRefresh)
 	mux.HandleFunc("POST /api/recordings/{id}/tts", a.handleTTS)
 	mux.HandleFunc("GET /api/recordings/{id}/tts", a.handleTTSAudio)
 
@@ -102,6 +104,7 @@ func (a *App) settingsView() map[string]any {
 	llmBase, _, llmModel := a.set.LLM()
 	ltOn, ltDir := a.set.LiveTransConfig()
 	ttsURL, ttsRef, ttsPrompt, ttsLang := a.set.TTSConfig()
+	calEnabled, calSource, leadMin, calAutoStart, calAutoStop, calMode := a.set.CalendarConfig()
 	return map[string]any{
 		"consentAccepted": a.set.ConsentOK(),
 		"meetingPrompt":   a.set.MeetingEnabled(),
@@ -118,6 +121,12 @@ func (a *App) settingsView() map[string]any {
 		"ttsPrompt":       ttsPrompt,
 		"ttsLang":         ttsLang,
 		"ttsReady":        ttsURL != "" && ttsRef != "",
+		"calEnabled":      calEnabled,
+		"calSource":       calSource,
+		"calLeadMin":      leadMin,
+		"calAutoStart":    calAutoStart,
+		"calAutoStop":     calAutoStop,
+		"calMode":         calMode,
 	}
 }
 
@@ -172,10 +181,46 @@ func (a *App) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		TTSRefPath     *string `json:"ttsRefPath"`
 		TTSPrompt      *string `json:"ttsPrompt"`
 		TTSLang        *string `json:"ttsLang"`
+		CalEnabled     *bool   `json:"calEnabled"`
+		CalSource      *string `json:"calSource"`
+		CalLeadMin     *int    `json:"calLeadMin"`
+		CalAutoStart   *bool   `json:"calAutoStart"`
+		CalAutoStop    *bool   `json:"calAutoStop"`
+		CalMode        *string `json:"calMode"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, 400, "请求格式错误")
 		return
+	}
+	if req.CalEnabled != nil || req.CalSource != nil || req.CalLeadMin != nil ||
+		req.CalAutoStart != nil || req.CalAutoStop != nil || req.CalMode != nil {
+		enabled, source, lead, autoStart, autoStop, mode := a.set.CalendarConfig()
+		if req.CalEnabled != nil {
+			enabled = *req.CalEnabled
+		}
+		if req.CalSource != nil {
+			source = *req.CalSource
+		}
+		if req.CalLeadMin != nil {
+			lead = *req.CalLeadMin
+			if lead < 0 {
+				lead = 0
+			}
+			if lead > 60 {
+				lead = 60
+			}
+		}
+		if req.CalAutoStart != nil {
+			autoStart = *req.CalAutoStart
+		}
+		if req.CalAutoStop != nil {
+			autoStop = *req.CalAutoStop
+		}
+		if req.CalMode != nil {
+			mode = *req.CalMode
+		}
+		a.set.SetCalendar(enabled, source, lead, autoStart, autoStop, mode)
+		go a.calendar.Refresh()
 	}
 	if req.MeetingPrompt != nil {
 		a.set.SetMeetingEnabled(*req.MeetingPrompt)
@@ -584,6 +629,34 @@ func (a *App) handleActions(w http.ResponseWriter, r *http.Request) {
 		items = []ActionItem{}
 	}
 	writeJSON(w, 200, map[string]any{"items": items})
+}
+
+// handleCalendar 今天的日程 + 当前触发状态
+func (a *App) handleCalendar(w http.ResponseWriter, r *http.Request) {
+	evs, err, at := a.calendar.Events()
+	enabled, source, leadMin, autoStart, autoStop, mode := a.set.CalendarConfig()
+	writeJSON(w, 200, map[string]any{
+		"enabled":   enabled,
+		"source":    source,
+		"leadMin":   leadMin,
+		"autoStart": autoStart,
+		"autoStop":  autoStop,
+		"mode":      mode,
+		"events":    evs,
+		"error":     err,
+		"loadedAt":  at,
+		"pending":   a.calendar.Pending(),
+	})
+}
+
+// handleCalendarRefresh 立刻重拉一次日历
+func (a *App) handleCalendarRefresh(w http.ResponseWriter, r *http.Request) {
+	if err := a.calendar.Refresh(); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	evs, _, at := a.calendar.Events()
+	writeJSON(w, 200, map[string]any{"events": evs, "loadedAt": at, "count": len(evs)})
 }
 
 // handleClip 导出一段片段（可选把字幕烧进画面）

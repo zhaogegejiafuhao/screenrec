@@ -112,6 +112,7 @@ async function loadState() {
       ? '已配置，可生成配音'
       : '未配置（需要本机 GPT-SoVITS 在跑）';
     $('consentState').textContent = s.settings.consentAccepted ? '已确认' : '未确认';
+    fillCalendarForm(s.settings);
   }
   if (s.recording && s.recording.status === 'recording') {
     startUI(s.recording);
@@ -526,6 +527,66 @@ async function clipNow() {
   }
 }
 
+/* ---------- 日历自动录制 ---------- */
+
+function fillCalendarForm(s) {
+  $('calChk').checked = !!s.calEnabled;
+  $('calSrc').value = s.calSource || '';
+  $('calLead').value = s.calLeadMin || 2;
+  $('calMode').value = s.calMode || 'audio';
+  $('calAutoChk').checked = !!s.calAutoStart;
+  $('calStopChk').checked = !!s.calAutoStop;
+}
+
+async function saveCalendar() {
+  const body = {
+    calEnabled: $('calChk').checked,
+    calSource: $('calSrc').value.trim(),
+    calLeadMin: parseInt($('calLead').value, 10) || 0,
+    calMode: $('calMode').value,
+    calAutoStart: $('calAutoChk').checked,
+    calAutoStop: $('calStopChk').checked,
+  };
+  try {
+    settingsCache = await api('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    toast('日历设置已保存');
+    loadCalendar(true);
+  } catch (err) { toast(err.message, 'err'); }
+}
+
+function hhmm(t) {
+  const d = new Date(t);
+  return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+}
+
+async function loadCalendar(refresh) {
+  const box = $('calList'), st = $('calState');
+  if (!box) return;
+  try {
+    if (refresh) await api('/api/calendar/refresh', { method: 'POST' });
+    const d = await api('/api/calendar');
+    fillCalendarForm(d);
+    box.innerHTML = '';
+    if (!d.enabled) { st.textContent = '未开启'; return; }
+    if (d.error) { st.textContent = '读取失败：' + d.error; return; }
+    const evs = d.events || [];
+    st.textContent = evs.length ? `今天还有 ${evs.length} 条日程` : '没读到日程';
+    for (const e of evs) {
+      const li = document.createElement('li');
+      const mark = e.fired ? ' · 已提醒' : '';
+      li.textContent = `${hhmm(e.start)}–${hhmm(e.end)} ${e.title}${mark}`;
+      if (e.inSec < 0) li.className = 'now';
+      box.appendChild(li);
+    }
+  } catch (err) {
+    st.textContent = '读取失败：' + err.message;
+  }
+}
+
 /* ---------- 操作 ---------- */
 async function rename() {
   if (!state.cur) return;
@@ -762,6 +823,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('micTestBtn').onclick = micTest;
   $('winRefresh').onclick = loadWindows;
   $('mathChk').onchange = () => { if (state.curId) updateExportLinks(state.curId); };
+  $('calSave').onclick = saveCalendar;
+  $('calRefresh').onclick = () => loadCalendar(true);
   $('meetingChk').onchange = async (e) => {
     try {
       settingsCache = await api('/api/settings', {
@@ -840,4 +903,5 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('clipMarkStart').onclick = () => markClip('start');
   $('clipMarkEnd').onclick = () => markClip('end');
   $('clipBtn').onclick = clipNow;
+  loadCalendar(false);
 });

@@ -24,6 +24,7 @@
 - **整段精校**：停止后自动用 VAD 重新分段转写，准确率更高
 - **时间戳**：每段带起止时间，点一下跳到对应画面
 - **纪要导出**：Markdown / Word 一键生成，按说话人合并成段、带时间轴，可选「公式整理」
+- **日历到点录制**：读 Outlook / ICS / 订阅链接，会前提醒或直接开录，会后自动停
 - **AI 纪要**：接 OpenAI 兼容接口（DeepSeek / 通义 / 本地 Ollama），输出议题 / 结论 / 待办；**没 Key 时自动退到本地规则抽取**
 - **片段导出**：框选起止点裁一段，可把字幕烧进画面，直接发出去
 - **MCP server**：把录制、文稿、纪要、待办、剪辑暴露给 Claude Desktop / Cursor 等 AI 客户端
@@ -353,6 +354,8 @@ r, _, err := MessageBoxW.Call(0, text, caption, MB_OKCANCEL|MB_ICONWARNING|MB_TO
 | POST | `/api/recordings/{id}/diarize` | 说话人分离 |
 | GET | `/api/recordings/{id}/media` | 媒体（支持 Range） |
 | GET | `/api/recordings/{id}/transcript?format=txt\|srt` | 导出 |
+| GET | `/api/calendar` | 今天剩余日程 + 日历配置 + 读取错误 |
+| POST | `/api/calendar/refresh` | 立刻重拉一次日历 |
 
 ## 实测数据（RTX 3050 4GB / i7 笔记本）
 
@@ -581,19 +584,19 @@ MarianMT + PyTorch（复用 GPT-SoVITS 内置的 Python 3.9 运行时），CPU �
 ```powershell
 go build -ldflags "-H windowsgui" -o build\screenrec.exe .
 go build -o build\screenrec-mcp.exe .\tools\mcpserver
-go run ./tools/release -version 0.3.0 -exe build\screenrec.exe -mcp build\screenrec-mcp.exe
+go run ./tools/release -version 0.4.0 -exe build\screenrec.exe -mcp build\screenrec-mcp.exe
 
 # 单文件安装包：stub + 把发布 zip 追加到自己末尾 + 页脚
 go build -o build\setup-stub.exe .\tools\installer
-build\setup-stub.exe -pack dist\screenrec-0.3.0-win64.zip -out dist\setup-0.3.0.exe -version 0.3.0
+build\setup-stub.exe -pack dist\screenrec-0.4.0-win64.zip -out dist\setup-0.4.0.exe -version 0.4.0
 ```
 
 输出两个产物：
 
 | 文件 | 说明 |
 |---|---|
-| `dist/screenrec-0.3.0-win64.zip`（约 9MB） | 绿色版，解压即用；同名 `.sha256` |
-| `dist/setup-0.3.0.exe`（约 13MB） | 安装包：单文件，双击就装，**不需要管理员权限** |
+| `dist/screenrec-0.4.0-win64.zip`（约 9MB） | 绿色版，解压即用；同名 `.sha256` |
+| `dist/setup-0.4.0.exe`（约 13MB） | 安装包：单文件，双击就装，**不需要管理员权限** |
 
 安装包做的事（`tools/installer`，纯 Go，不依赖 Inno Setup / NSIS）：
 
@@ -657,9 +660,43 @@ build\setup-stub.exe -pack dist\screenrec-0.3.0-win64.zip -out dist\setup-0.3.0.
 | `get_summary` / `generate_summary` | 读 / 生成纪要（没 Key 走本地抽取） |
 | `get_action_items` | 结构化待办 |
 | `clip_recording` | 裁片段，可选烧字幕 |
+| `today_agenda` | 今天剩下的日程（含入会链接） |
 
 Claude Desktop / Cursor 里可以直接问："上周哪次会提到预算？把结论和待办列出来。"
 服务没启动时会明确提示先双击 `screenrec.exe`。
+
+### 二十二、日历到点自动录制
+
+「检测麦克风占用」是**事后**发现：等提示弹出来，前几句已经说完了。日历是**事前**已知的，
+所以再补一条更靠前的触发路径。
+
+数据源三种，设置里填一个即可：
+
+| 填什么 | 怎么取 |
+|---|---|
+| 留空 / `outlook` | 调 PowerShell 的 Outlook COM 导出未来两天日程 |
+| `D:\xxx.ics` | 直接读本地 ICS 文件 |
+| `https://…` | 下载日历订阅链接（Google / 飞书 / 腾讯会议的 iCal 地址） |
+
+流程：每 10 分钟拉一次日历，每 20 秒检查一次。触发窗口是 `[开始 - 提前分钟数, 开始 + 10 分钟]`，
+命中后：
+
+- **默认**：悬浮条弹「『周会』2 分钟后开始，要开始录制吗？」，点「开始」才录（合规上更稳妥）
+- **勾了「到点直接开录」**：到点自动起录，标题直接用日程名
+- **日程结束后自动停**：结束时间 +5 分钟宽限，只对日历起的那一条生效
+
+ICS 解析是自己写的（`calendar.go`，无第三方库），覆盖了实际会碰到的情况：
+
+- `DTSTART` 的三种形态：本地时间、`Z` 结尾的 UTC、`VALUE=DATE` 全天
+- `TZID=China Standard Time` 这类 Windows 时区名 Go 的 `LoadLocation` 认不出来，
+  有一张兜底偏移表；实在认不出就按本地浮动时间处理
+- `RRULE` 展开（DAILY / WEEKLY+BYDAY / MONTHLY / YEARLY，含 INTERVAL / COUNT / UNTIL）
+- `DURATION:PT1H30M` 代替 `DTEND`；折行拼接；`\,` `\;` `\n` 反转义
+- `STATUS:CANCELLED` 丢弃；`RECURRENCE-ID`（重复日程的单次改期）跳过，避免重复计数
+- LOCATION / DESCRIPTION 里抠出入会链接（腾讯会议 / Zoom / Teams / 飞书 / 钉钉）
+
+两个细节：**全天日程（生日、节假日）不提醒**；**提示没被响应时不会被下一条顶掉**，
+但过了触发窗口会自动撤掉——人不在电脑前时不至于一直挂着。
 
 ## 目录结构
 
@@ -671,6 +708,7 @@ screenrec/
 ├── overlay.go         # 悬浮条窗口（GDI 绘制 + 按钮 + 鼠标命中）
 ├── settings.go        # 配置持久化（授权/会议提醒/关闭状态）
 ├── meeting.go         # 会议检测与提醒（去抖、静默、不再提醒）
+├── calendar.go        # ICS 解析 + Outlook/订阅拉取 + 到点提醒/自动录制
 ├── reg.go             # 注册表读「谁在占用麦克风」
 ├── recorder.go        # ffmpeg 录制进程、实时转写循环（流式/分块双路径）
 ├── devices.go         # dshow 设备枚举、显示器探测、ffprobe
@@ -731,6 +769,7 @@ screenrec/
 - [x] ~~AI 纪要~~：已支持（OpenAI 兼容接口，五段式输出，可进导出文档）
 - [x] ~~单文件安装包~~：已支持（setup.exe，快捷方式 + 卸载项 + 可选模型下载）
 - [x] ~~电脑声音进实时字幕~~：已支持（能量端点切句 + 回声去重）
+- [x] ~~日历到点录制~~：已支持（ICS 解析 + Outlook/订阅 + 到点提醒或自动开录）
 - [ ] **跨设备互斥做不到**：需要账号体系与服务端会话，纯本地无解
 - [ ] 公式只做到「规则可读化」：复杂公式（矩阵、多行推导、上下标嵌套）需要接 LLM 转 LaTeX
 - [ ] 实时双语只翻断句后的最终结果（不翻流式草稿），冷启动 49~84 秒，已在开启时后台预热
@@ -745,6 +784,8 @@ screenrec/
 - [ ] 实时字幕对电脑声音是 2.5 秒级延迟（端点检测 + 分块识别），麦克风走流式更快
 - [ ] 蓝牙耳机不支持 WASAPI 设备回环，要用「进程级回环」或换成有线输出
 - [ ] 会议检测是启发式：只认已知会议应用；小众软件（飞书网页版等）可能漏报
+- [ ] 日历只支持 ICS（Outlook / 文件 / 订阅链接）；不含 `VTIMEZONE` 的陌生 `TZID` 会按本地时间处理
+- [ ] 日历的「自动停止」只对日历自己起的那条生效，宽限 5 分钟；会议拖堂要手动续录
 - [ ] 窗口录制依赖 GDI，独占全屏的游戏/DirectX 应用可能抓到黑屏
 - [ ] 说话人分离在长音频上耗时较长（1 小时录音约 1~2 分钟）
 - [ ] 转写文本的说话人标签是按时间重叠近似，快速抢话时可能串
