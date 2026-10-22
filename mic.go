@@ -24,29 +24,57 @@ var (
 	encMu   sync.Mutex
 	encName string
 	encAt   time.Time
+	encBusy bool
 )
 
-// detectEncoder 探测可用的 H.264 编码器（优先 NVENC，失败回退 libx264）
+// detectEncoder 返回可用的 H.264 编码器（优先 NVENC，失败回退 libx264）。
+//
+// 探测本身要拉起一次真编码试硬件，实测本机要 3~4 秒（加载 CUDA 运行库很慢）。
+// 而这个函数既在 /api/state 里（前端每 1.2 秒轮询一次）、也在开始录制时调用，
+// 同步探测会让界面整段卡住——表现为录像按钮点下去好几秒没反应、轮询像是卡死。
+// 所以改成：立刻返回已知结果，第一次调用顺手在后台探一次，探完更新缓存。
 func detectEncoder(ff string) string {
 	encMu.Lock()
-	defer encMu.Unlock()
-	if encName != "" && time.Since(encAt) < 5*time.Minute {
-		return encName
+	if encName != "" && time.Since(encAt) < 6*time.Hour {
+		v := encName
+		encMu.Unlock()
+		return v
 	}
-	encName = "libx264"
-	if ff != "" {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		cmd := winhide.CommandContext(ctx, ff, "-hide_banner", "-loglevel", "error",
-			"-f", "lavfi", "-i", "testsrc=size=320x240:rate=5", "-t", "0.4",
-			"-c:v", "h264_nvenc", "-f", "null", "-")
-		cmd.Dir = filepath.Dir(ff)
-		if err := cmd.Run(); err == nil {
-			encName = "nvenc"
+	cached := encName // 过期了也先用上次的结果顶着，编码器不会突然消失
+	if encBusy {
+		encMu.Unlock()
+		if cached == "" {
+			return "libx264"
 		}
+		return cached
 	}
-	encAt = time.Now()
-	return encName
+	encBusy = true
+	encMu.Unlock()
+
+	go func() {
+		name := "libx264"
+		if ff != "" {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			// 只编一帧 128x128：目的是确认硬件编码器能不能打开，
+			// 不需要真实的测试图案，越小越省时间
+			cmd := winhide.CommandContext(ctx, ff, "-hide_banner", "-loglevel", "error",
+				"-f", "lavfi", "-i", "color=c=black:s=128x128:r=1", "-frames:v", "1",
+				"-c:v", "h264_nvenc", "-f", "null", "-")
+			cmd.Dir = filepath.Dir(ff)
+			if err := cmd.Run(); err == nil {
+				name = "nvenc"
+			}
+		}
+		encMu.Lock()
+		encName, encAt, encBusy = name, time.Now(), false
+		encMu.Unlock()
+	}()
+
+	if cached == "" {
+		return "libx264"
+	}
+	return cached
 }
 
 // sampleMic 采集一小段麦克风音频，返回电平诊断

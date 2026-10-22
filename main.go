@@ -117,6 +117,17 @@ func main() {	setupDPI()
 			}
 		}
 	}()
+
+	// 预热设备与显示器探测：这两个都要拉起 ffmpeg（枚举设备 1~2 秒、试 4 个 ddagrab 各几秒），
+	// 不预热的话第一次打开页面会拿到空列表，之后每过缓存期还会卡一次轮询。
+	// 放后台跑，不影响窗口和 HTTP 服务起来。
+	go func() {
+		start := time.Now()
+		warmDeviceCache(app.ffmpeg)
+		warmScreenCache(app.ffmpeg)
+		detectEncoder(app.ffmpeg) // 异步探测，顺便把缓存建起来
+		log.Printf("设备与显示器已就绪（耗时 %.1fs）", time.Since(start).Seconds())
+	}()
 	defer app.asr.Close()
 	defer app.stream.Close()
 

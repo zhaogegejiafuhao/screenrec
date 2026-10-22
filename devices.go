@@ -25,10 +25,12 @@ var (
 	devCacheMu sync.Mutex
 	devCache   []Device
 	devCacheAt time.Time
+	devBusy    bool
 
 	screenMu    sync.Mutex
 	screenCache []int
 	screenAt    time.Time
+	screenBusy  bool
 )
 
 // findTool 依次在环境变量、固定目录、PATH 中查找可执行文件
@@ -128,12 +130,8 @@ func findPython() string {
 var dshowRe = regexp.MustCompile(`"([^"]+)"\s+\((audio|video)\)`)
 
 // listDevices 枚举 DirectShow 设备（结果缓存 10 秒）
-func listDevices(ff string) []Device {
-	devCacheMu.Lock()
-	defer devCacheMu.Unlock()
-	if time.Since(devCacheAt) < 10*time.Second && devCache != nil {
-		return devCache
-	}
+// enumerateDevices 真正跑一次 ffmpeg 枚举（慢，1~2 秒）。调用方负责缓存。
+func enumerateDevices(ff string) []Device {
 	if ff == "" {
 		return nil
 	}
@@ -156,20 +154,56 @@ func listDevices(ff string) []Device {
 		}
 		devs = append(devs, Device{Name: name, Kind: kind, Label: label})
 	}
-	devCache, devCacheAt = devs, time.Now()
 	return devs
 }
 
-// probeScreens 探测可用的显示器序号（ddagrab output_idx），结果缓存 60 秒
-func probeScreens(ff string) []int {
+// warmDeviceCache 启动时同步枚举一次，保证打开页面就能看到设备列表
+func warmDeviceCache(ff string) {
+	devs := enumerateDevices(ff)
+	if devs == nil {
+		return
+	}
+	devCacheMu.Lock()
+	devCache, devCacheAt = devs, time.Now()
+	devCacheMu.Unlock()
+}
+
+// listDevices 返回设备列表。缓存 3 分钟，过期后先返回旧列表、后台刷新——
+// 插拔耳机最多 3 分钟内自动出现，而轮询不再被枚举拖住。
+// （枚举要跑一遍 ffmpeg -list_devices，实测 1~2 秒，而 /api/state 每 1.2 秒就被调用一次。）
+func listDevices(ff string) []Device {
 	if ff == "" {
 		return nil
 	}
-	screenMu.Lock()
-	defer screenMu.Unlock()
-	if time.Since(screenAt) < 60*time.Second && screenCache != nil {
-		return screenCache
+	devCacheMu.Lock()
+	if devCache != nil && time.Since(devCacheAt) < 3*time.Minute {
+		v := devCache
+		devCacheMu.Unlock()
+		return v
 	}
+	cached := devCache
+	if devBusy {
+		devCacheMu.Unlock()
+		return cached
+	}
+	devBusy = true
+	devCacheMu.Unlock()
+
+	go func() {
+		devs := enumerateDevices(ff)
+		devCacheMu.Lock()
+		if devs != nil {
+			devCache, devCacheAt = devs, time.Now()
+		}
+		devBusy = false
+		devCacheMu.Unlock()
+	}()
+
+	return cached
+}
+
+// enumerateScreens 并发试 4 个 ddagrab 序号，返回能出帧的那些
+func enumerateScreens(ff string) []int {
 	var out []int
 	var wg sync.WaitGroup
 	ok := make([]bool, 4)
@@ -195,8 +229,57 @@ func probeScreens(ff string) []int {
 	if len(out) == 0 {
 		out = []int{0}
 	}
-	screenCache, screenAt = out, time.Now()
 	return out
+}
+
+// warmScreenCache 启动时同步探一次显示器
+func warmScreenCache(ff string) {
+	if ff == "" {
+		return
+	}
+	out := enumerateScreens(ff)
+	screenMu.Lock()
+	screenCache, screenAt = out, time.Now()
+	screenMu.Unlock()
+}
+
+// probeScreens 返回可用的显示器序号（ddagrab output_idx）。
+//
+// 探测要并发拉起 4 个 ffmpeg 各试一次 ddagrab，同步做会让 /api/state 卡一两秒；
+// 而它就在 /api/state 里被前端每 1.2 秒调用一次。所以同样改成「先返回缓存、
+// 后台探一次」，第一次调用时先假定只有主屏。
+func probeScreens(ff string) []int {
+	if ff == "" {
+		return nil
+	}
+	screenMu.Lock()
+	if screenCache != nil && time.Since(screenAt) < 10*time.Minute {
+		v := screenCache
+		screenMu.Unlock()
+		return v
+	}
+	cached := screenCache
+	if screenBusy {
+		screenMu.Unlock()
+		if cached == nil {
+			return []int{0}
+		}
+		return cached
+	}
+	screenBusy = true
+	screenMu.Unlock()
+
+	go func() {
+		out := enumerateScreens(ff)
+		screenMu.Lock()
+		screenCache, screenAt, screenBusy = out, time.Now(), false
+		screenMu.Unlock()
+	}()
+
+	if cached != nil {
+		return cached
+	}
+	return []int{0}
 }
 
 // probeDuration 读取媒体时长（毫秒）
