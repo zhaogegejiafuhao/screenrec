@@ -578,7 +578,8 @@ async function loadCalendar(refresh) {
     for (const e of evs) {
       const li = document.createElement('li');
       const mark = e.fired ? ' · 已提醒' : '';
-      li.textContent = `${hhmm(e.start)}–${hhmm(e.end)} ${e.title}${mark}`;
+      const time = e.allDay ? '全天' : `${hhmm(e.start)}–${hhmm(e.end)}`;
+      li.textContent = `${time} ${e.title}${mark}`;
       if (e.inSec < 0) li.className = 'now';
       box.appendChild(li);
     }

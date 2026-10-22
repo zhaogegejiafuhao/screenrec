@@ -635,17 +635,25 @@ func (a *App) handleActions(w http.ResponseWriter, r *http.Request) {
 func (a *App) handleCalendar(w http.ResponseWriter, r *http.Request) {
 	evs, err, at := a.calendar.Events()
 	enabled, source, leadMin, autoStart, autoStop, mode := a.set.CalendarConfig()
+	// cal* 前缀字段与 settings 命名一致，供前端 fillCalendarForm 直接消费；
+	// 旧的无前缀字段保留，避免破坏已有调用方。
 	writeJSON(w, 200, map[string]any{
-		"enabled":   enabled,
-		"source":    source,
-		"leadMin":   leadMin,
-		"autoStart": autoStart,
-		"autoStop":  autoStop,
-		"mode":      mode,
-		"events":    evs,
-		"error":     err,
-		"loadedAt":  at,
-		"pending":   a.calendar.Pending(),
+		"enabled":      enabled,
+		"source":       source,
+		"leadMin":      leadMin,
+		"autoStart":    autoStart,
+		"autoStop":     autoStop,
+		"mode":         mode,
+		"calEnabled":   enabled,
+		"calSource":    source,
+		"calLeadMin":   leadMin,
+		"calAutoStart": autoStart,
+		"calAutoStop":  autoStop,
+		"calMode":      mode,
+		"events":       evs,
+		"error":        err,
+		"loadedAt":     at,
+		"pending":      a.calendar.Pending(),
 	})
 }
 
