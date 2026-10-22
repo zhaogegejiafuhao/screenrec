@@ -126,7 +126,8 @@
         <div class="row">
           <span class="muted small">引擎</span>
           <select id="llmEngine" class="mini">
-            <option value="auto">自动（本地模型优先，其次云端，都没有走规则）</option>
+            <option value="fusion">融合（规则抽候选+模型甄别，待办最准）</option>
+            <option value="auto">自动（有模型走融合，没有走规则）</option>
             <option value="local">只用本机模型（完全离线）</option>
             <option value="cloud">只用云端 API</option>
             <option value="off">不用模型（纯规则抽取）</option>

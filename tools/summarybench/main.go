@@ -506,6 +506,41 @@ func parseActions(md string) []benchAction {
 				due = ""
 			}
 		}
+		// 没有显式分隔符时，试着从右往左把「负责人/时间」尾巴一段段摘出来。
+		// 小模型常写成「补全埋点，小李负责，周四前」而不是 prompt 要求的「— 负责人 / 时间」，
+		// 不摘掉的话这段尾巴会把文本相似度压到阈值以下，明明是正确答案却判不命中。
+		if owner == "" && due == "" {
+			for round := 0; round < 4; round++ {
+				i := strings.LastIndex(text, "，")
+				if i <= 0 {
+					break
+				}
+				tail := strings.TrimSpace(text[i+len("，"):])
+				head := strings.TrimSpace(text[:i])
+				if head == "" || !looksLikeMeta(tail) || len([]rune(tail)) > 14 {
+					break
+				}
+				text = head
+				o, d := guessOwner(tail), guessDue(tail)
+				if o != "" && owner == "" {
+					owner = o
+				}
+				if d != "" && due == "" {
+					due = d
+				}
+				if o == "" && d == "" && owner == "" {
+					owner = tail
+				}
+			}
+		}
+		for _, w := range []string{"未指定", "无", "-", "待定"} {
+			if owner == w {
+				owner = ""
+			}
+			if due == w {
+				due = ""
+			}
+		}
 		if owner == "" {
 			owner = guessOwner(text)
 		}
@@ -515,6 +550,31 @@ func parseActions(md string) []benchAction {
 		out = append(out, benchAction{Text: text, Owner: owner, Due: due})
 	}
 	return out
+}
+
+// looksLikeMeta 判断一段尾巴像不像「负责人/时间」元数据而不是任务内容。
+// 判据：出现负责人用词或时间词。宁可错判成任务（漏摘），也别把「补齐了才有数据看」
+// 这种真·任务尾巴切掉。
+func looksLikeMeta(s string) bool {
+	for _, w := range []string{"负责", "跟进", "处理", "来做", "来过", "确认"} {
+		if strings.Contains(s, w) {
+			return true
+		}
+	}
+	for _, w := range []string{"本周", "下周", "月底", "年底", "明天", "后天", "今天",
+		"上午", "下午", "周一", "周二", "周三", "周四", "周五", "周六", "周日",
+		"之前", "以前", "截止", "deadline", "by "} {
+		if strings.Contains(s, w) {
+			return true
+		}
+	}
+	// 纯日期/时刻：10月25日、3 号、Q3
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			return true
+		}
+	}
+	return false
 }
 
 func listNum(s string) bool {
@@ -671,6 +731,8 @@ func render(set *goldSet, rows [][]engineResult, engines []string, repeat int) s
 	}
 
 	fmt.Fprintf(&b, "\n指标口径：待办命中=字符二元组包含度≥阈值（默认 0.5，交集/较短一方），一个标准答案只认一条预测；\n")
+	fmt.Fprintf(&b, "解析时会先把「，小李负责，周四前」这类逗号元数据尾巴摘掉再比对——小模型常不按 prompt 要求的\n")
+	fmt.Fprintf(&b, "「— 负责人 / 时间」格式输出，不摘的话同义改写会被误判成不命中；\n")
 	fmt.Fprintf(&b, "精确率低说明模型在编待办（幻觉），召回率低说明漏待办；ROUGE-L 是和人工参考摘要的字符级 LCS F1。\n")
 	return b.String()
 }

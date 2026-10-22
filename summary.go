@@ -155,56 +155,84 @@ func chatCompletionEx(ctx context.Context, base, key, model string, messages []c
 //   - cloud：只用云端 API（没 Key 直接报错，不偷偷改用别的）
 //   - local：只用本机 llama.cpp（没起来就尝试拉起，拉不起来报错）
 //   - off  ：不联网、不跑模型，纯规则抽取
-//   - auto ：本地模型能用就用（完全离线最快），否则有 Key 用云端，都没有走规则
-func (a *App) summarizeRecord(rec *Recording) (string, error) {
-	engine, base, key, model, localURL, localModel, localBin, localGGUF, gpuLayers := a.set.LLMEngineConfig()
+//   - fusion：规则抽候选 + 模型甄别改写（评测下来待办最准，见 docs/summary-bench.md）
+//   - auto ：等价于 fusion——有模型走融合，没有模型才退规则
+//
 
+// llmSpec 一个可用的模型后端
+type llmSpec struct {
+	base    string
+	key     string
+	model   string
+	timeout time.Duration
+	extra   map[string]any
+	label   string
+}
+
+// errNoModel 没有可用模型后端（既没拉起本地、也没填 Key）
+var errNoModel = fmt.Errorf("没有可用的模型后端")
+
+// pickModel 按引擎设置挑后端：local/fusion 优先本机，cloud 只用云端，
+// auto 是「本机能用就用，否则云端，都没有就规则」。
+func (a *App) pickModel(engine, base, key, model, localURL, localModel, localBin, localGGUF string, gpuLayers int) (llmSpec, error) {
 	useLocal := false
 	switch engine {
-	case "local":
+	case "local", "fusion":
 		useLocal = true
 	case "cloud":
 		useLocal = false
-	case "off":
-		return a.writeLocalSummary(rec)
 	default: // auto
-		if localBin != "" || localGGUF != "" || a.localLLMUp(localURL) {
-			useLocal = true
-		} else {
-			useLocal = false
-		}
+		useLocal = localBin != "" || localGGUF != "" || a.localLLMUp(localURL)
 	}
 
-	// 本地优先：能用就用，用不了再退云端；明确选了 local 就不退
+	var localErr error
 	if useLocal {
 		if err := a.ensureLocalLLM(localBin, localGGUF, localURL, gpuLayers); err == nil {
-			content, err := a.modelSummary(rec, localURL, "", localModel, localTimeout, localChatExtra, "本地模型 "+localModel)
-			if err == nil {
-				return content, nil
-			}
-			if engine == "local" {
-				return "", err
-			}
-			log.Printf("[llm] 本地模型失败，改用云端：%v", err)
-		} else if engine == "local" {
-			return "", err
+			return llmSpec{localURL, "", localModel, localTimeout, localChatExtra, "本地模型 " + localModel}, nil
 		} else {
-			log.Printf("[llm] 本地模型不可用，改用云端：%v", err)
+			localErr = err
 		}
 	}
 
-	if key == "" {
-		if engine == "cloud" {
-			return "", fmt.Errorf("选了云端纪要但没填 API Key")
+	if key != "" {
+		return llmSpec{base, key, model, 180 * time.Second, nil, model}, nil
+	}
+	if engine == "cloud" {
+		return llmSpec{}, fmt.Errorf("选了云端纪要但没填 API Key")
+	}
+	if localErr != nil {
+		return llmSpec{}, localErr
+	}
+	return llmSpec{}, errNoModel
+}
+
+func (a *App) summarizeRecord(rec *Recording) (string, error) {
+	engine, base, key, model, localURL, localModel, localBin, localGGUF, gpuLayers := a.set.LLMEngineConfig()
+
+	// 融合是评测里最强的路线（F1 0.56 vs 规则 0.33 / 纯模型 0.39），
+	// 且耗时和纯模型一样，所以 auto 有模型就用融合，没有才退规则
+	if engine == "auto" {
+		engine = "fusion"
+	}
+
+	if engine == "off" {
+		return a.writeLocalSummary(rec)
+	}
+
+	spec, err := a.pickModel(engine, base, key, model, localURL, localModel, localBin, localGGUF, gpuLayers)
+	if err != nil {
+		// 融合的前半段本来就是规则抽取，没模型时退化成规则即可，不必报错
+		if engine == "fusion" {
+			log.Printf("[llm] 融合纪要没有可用模型，退回规则抽取：%v", err)
+			return a.writeLocalSummary(rec)
 		}
 		return a.writeLocalSummary(rec)
 	}
 
-	content, err := a.modelSummary(rec, base, key, model, 180*time.Second, nil, model)
-	if err != nil {
-		return "", err
+	if engine == "fusion" {
+		return a.fusionSummary(rec, spec)
 	}
-	return content, nil
+	return a.modelSummaryWith(rec, spec)
 }
 
 // localTimeout 本地 4B 模型生成一段纪要的时间；CPU 上可能更久，给足 10 分钟
@@ -215,7 +243,7 @@ var localChatExtra = map[string]any{
 	"chat_template_kwargs": map[string]any{"enable_thinking": false},
 }
 
-func (a *App) modelSummary(rec *Recording, base, key, model string, timeout time.Duration, extra map[string]any, label string) (string, error) {
+func (a *App) modelSummaryWith(rec *Recording, spec llmSpec) (string, error) {
 	a.mu.RLock()
 	snap := *rec
 	snap.Segments = append([]Segment{}, rec.Segments...)
@@ -226,13 +254,13 @@ func (a *App) modelSummary(rec *Recording, base, key, model string, timeout time
 	}
 
 	input, truncated := buildSummaryInput(&snap, 14000)
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), spec.timeout)
 	defer cancel()
 
-	content, err := chatCompletionEx(ctx, base, key, model, []chatMessage{
+	content, err := chatCompletionEx(ctx, spec.base, spec.key, spec.model, []chatMessage{
 		{Role: "system", Content: summaryPrompt},
 		{Role: "user", Content: input},
-	}, timeout, extra)
+	}, spec.timeout, spec.extra)
 	if err != nil {
 		return "", err
 	}
@@ -243,7 +271,7 @@ func (a *App) modelSummary(rec *Recording, base, key, model string, timeout time
 	now := time.Now()
 	a.mu.Lock()
 	rec.Summary = content
-	rec.SummaryModel = label
+	rec.SummaryModel = spec.label
 	rec.SummaryAt = &now
 	a.mu.Unlock()
 	a.recorder.save(rec)

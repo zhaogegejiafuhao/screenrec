@@ -668,15 +668,17 @@ function llmStateText(s) {
   const localOK = !!s.llmLocalReady;
   const cloudOK = !!s.llmKeySet;
   let use = '规则抽取';
-  if (eng === 'local') use = localOK ? '本机模型' : '本机模型（未就绪）';
+  if (eng === 'fusion') use = localOK ? '融合（本机模型甄别）' : (cloudOK ? '融合（云端甄别）' : '规则抽取（无模型可甄别）');
+  else if (eng === 'local') use = localOK ? '本机模型' : '本机模型（未就绪）';
   else if (eng === 'cloud') use = cloudOK ? '云端 API' : '云端 API（缺 Key）';
   else if (eng === 'off') use = '规则抽取';
-  else use = localOK ? '本机模型' : (cloudOK ? '云端 API' : '规则抽取');
+  else use = localOK ? '融合（本机模型甄别）' : (cloudOK ? '融合（云端甄别）' : '规则抽取');
   const parts = ['当前：' + use];
   if (localOK) parts.push('本机已就绪');
   else if (s.llmLocalHasGguf) parts.push('本机模型已配置，未启动');
   if (cloudOK) parts.push('云端 Key 已填');
-  if (eng !== 'local' && !localOK && !cloudOK) parts.push('装本机模型或填 Key 可出更完整纪要');
+  if (eng === 'fusion' && !localOK && !cloudOK) parts.push('融合需要模型：装本机模型或填 Key，否则只出规则版');
+  else if (eng !== 'local' && !localOK && !cloudOK) parts.push('装本机模型或填 Key 可出更完整纪要');
   return parts.join(' · ');
 }
 
