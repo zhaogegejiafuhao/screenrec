@@ -2,9 +2,9 @@
 package main
 
 import (
+	"screenrec/internal/winhide"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -46,7 +46,7 @@ $synth.Dispose()
 		panic(err)
 	}
 
-	cmd := exec.Command("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps)
+	cmd := winhide.Command("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {

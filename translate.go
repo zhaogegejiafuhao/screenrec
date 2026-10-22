@@ -4,11 +4,11 @@ package main
 // 全程离线，模型放在 assets/models/mt。
 
 import (
+	"screenrec/internal/winhide"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -116,7 +116,7 @@ func (a *App) translateRecord(rec *Recording, dir string) (int, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, a.python, script,
+	cmd := winhide.CommandContext(ctx, a.python, script,
 		"--dir", dir,
 		"--models", modelDir,
 		"--in", inPath,

@@ -868,6 +868,30 @@ ICS 解析是自己写的（`calendar.go`，无第三方库），覆盖了实际
 停止从 4.2 秒降到 3 秒左右；同时悬浮条立刻显示「正在保存录制…」并隐藏按钮防止重复点击，
 网页按钮也立刻变「正在保存…」并禁用。
 
+### 二十八、没有黑框闪出来
+
+程序编译成 `windowsgui` 子系统，双击运行没有控制台——但 `exec.Command` 启动的
+ffmpeg / python / 命令行工具都是控制台程序，Windows 会给**每个子进程**新建一个黑框。
+一次「开始录制」同时拉起 ffmpeg、回环采集、识别 worker、屏幕探测（4 个并发），
+屏幕上能连弹五六个；启动、转写、说话人分离、配音、日历同步各来一轮。
+
+原来只有 3 处设了 `HideWindow`，其余 27 处都是裸调。现在统一走 `internal/winhide`：
+
+```go
+cmd := winhide.Command(ffmpeg, args...)          // 等价 exec.Command，但不弹框
+cmd := winhide.CommandContext(ctx, python, ...)  // 等价 exec.CommandContext
+```
+
+两个细节：
+
+- 只设 `SysProcAttr.HideWindow` 有时仍会闪一下（控制台先创建再隐藏），
+  要同时加 `CREATE_NO_WINDOW`（`0x08000000`）才是从根上不创建控制台
+- 原来 3 处手写 `cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}` 的，
+  改成 helper 后要把这行删掉——它是**整体赋值**，会覆盖掉 `CREATE_NO_WINDOW`
+
+顺带把采集降级的说明接到了界面上：录窗口时如果因为 GPU 合成拿不到画面、
+被改成「全屏采集 + 裁剪」，会弹一条 7 秒的黄色提示，而不是等用户回放时才发现画面被遮挡。
+
 ## 目录结构
 
 ```
@@ -894,6 +918,7 @@ screenrec/
 ├── search.go          # 转写全文增量索引（MCP 跨记录搜索用）
 ├── llm_local.go       # 本机 llama.cpp 推理服务的拉起与探测
 ├── capture_probe.go   # 录屏预检：抓帧判黑屏，窗口抓不到就改全屏+裁剪
+├── internal/winhide/  # 子进程封装：不弹控制台黑框
 ├── summary_fusion.go  # 融合纪要：规则抽候选 + 模型甄别改写
 ├── summary.go         # AI 纪要（云端 / 本机 / 融合 / 规则四选一）
 ├── summary_local.go   # 无 Key 的本地抽取纪要 + 结构化待办

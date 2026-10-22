@@ -4,10 +4,10 @@ package main
 // 剪辑是"录完能直接发出去"的最后一公里，之前只能整条导出。
 
 import (
+	"screenrec/internal/winhide"
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -126,7 +126,7 @@ func (a *App) clipRecording(id string, opt ClipOptions) (*Recording, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, a.ffmpeg, args...)
+	cmd := winhide.CommandContext(ctx, a.ffmpeg, args...)
 	cmd.Dir = tmpDir
 	if outBytes, err := cmd.CombinedOutput(); err != nil {
 		os.Remove(out)

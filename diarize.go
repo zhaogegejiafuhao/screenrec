@@ -1,12 +1,12 @@
 package main
 
 import (
+	"screenrec/internal/winhide"
 	"context"
 	"encoding/json"
 	"fmt"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -40,7 +40,7 @@ func (a *App) Diarize(media string) ([]DiarSeg, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, a.ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+	cmd := winhide.CommandContext(ctx, a.ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
 		"-i", media, "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", wav)
 	cmd.Dir = filepath.Dir(a.ffmpeg)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -49,7 +49,7 @@ func (a *App) Diarize(media string) ([]DiarSeg, error) {
 
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 60*time.Minute)
 	defer cancel2()
-	c2 := exec.CommandContext(ctx2, a.python, script, wav, fmt.Sprintf("%.2f", a.set.DiarThresholdVal()))
+	c2 := winhide.CommandContext(ctx2, a.python, script, wav, fmt.Sprintf("%.2f", a.set.DiarThresholdVal()))
 	c2.Dir = a.assets
 	out, err := c2.Output()
 	if err != nil {

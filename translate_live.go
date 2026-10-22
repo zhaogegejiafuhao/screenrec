@@ -4,6 +4,7 @@ package main
 // 单次请求一行 JSON，避免每句都重新加载 300MB 模型。
 
 import (
+	"screenrec/internal/winhide"
 	"bufio"
 	"encoding/json"
 	"fmt"
@@ -98,7 +99,7 @@ func (a *App) ltEnsure() error {
 		return fmt.Errorf("缺少翻译模型（models/mt）")
 	}
 
-	cmd := exec.Command(a.python, "-u", script, "--serve", "--models", modelDir)
+	cmd := winhide.Command(a.python, "-u", script, "--serve", "--models", modelDir)
 	cmd.Dir = a.assets
 	in, err := cmd.StdinPipe()
 	if err != nil {

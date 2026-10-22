@@ -45,12 +45,12 @@ async function api(path, opts = {}) {
   return data;
 }
 
-function toast(msg, type = 'ok') {
+function toast(msg, type = 'ok', ms = 3000) {
   const t = $('toast');
   t.textContent = msg;
   t.className = 'show ' + type;
   clearTimeout(t._t);
-  t._t = setTimeout(() => (t.className = ''), 3000);
+  t._t = setTimeout(() => (t.className = ''), ms);
 }
 
 function fmtDur(ms) {
@@ -269,7 +269,8 @@ async function startRecording() {
     });
     btn.disabled = false;
     startUI(rec);
-    toast('开始录制');
+    // 有采集降级说明时那句更重要，别再被「开始录制」顶掉
+    if (!rec.captureNote) toast('开始录制');
   } catch (e) {
     btn.disabled = false;
     btn.textContent = oldLabel;
@@ -279,6 +280,8 @@ async function startRecording() {
 
 function startUI(rec) {
   state.recording = rec;
+  // 窗口抓到黑屏被降级成「全屏+裁剪」时要说一声，否则用户不知道画面可能被遮挡
+  if (rec.captureNote) toast(rec.captureNote, 'warn', 7000);
   $('recBtn').textContent = '■ 停止录制';
   $('recBtn').classList.add('stop');
   $('liveBox').hidden = false;

@@ -163,6 +163,7 @@ video { width: 100%; max-height: 460px; background: #000; border-radius: 10px; }
 }
 #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 #toast.err { border-color: var(--danger); }
+#toast.warn { border-color: var(--warn, #EA8F00); max-width: 520px; }
 #toast.ok { border-color: var(--ok); }
 
 @media (max-width: 900px) {

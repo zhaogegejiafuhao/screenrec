@@ -1,13 +1,14 @@
 package main
 
 import (
+	"os/exec"
+	"screenrec/internal/winhide"
 	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -74,7 +75,7 @@ func (a *App) startLoopback(device, outPath string) (*LoopbackProc, error) {
 			"--libs", filepath.Join(a.assets, "pylibs"),
 		}
 	}
-	cmd := exec.Command(a.python, args...)
+	cmd := winhide.Command(a.python, args...)
 	cmd.Dir = a.assets
 	errPipe, err := cmd.StderrPipe()
 	if err != nil {
@@ -188,7 +189,7 @@ func (a *App) mixSystemAudio(src, sysPCM string, leadMs int64, gainDb int) error
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, a.ffmpeg, args...)
+	cmd := winhide.CommandContext(ctx, a.ffmpeg, args...)
 	cmd.Dir = filepath.Dir(a.ffmpeg)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		os.Remove(tmp)
@@ -239,7 +240,7 @@ except Exception as e:
 `
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, a.python, "-c", code, filepath.Join(a.assets, "pylibs"))
+	cmd := winhide.CommandContext(ctx, a.python, "-c", code, filepath.Join(a.assets, "pylibs"))
 	cmd.Dir = a.assets
 	out, err := cmd.Output()
 	if err != nil {

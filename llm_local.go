@@ -1,17 +1,17 @@
 package main
 
 import (
+	"os/exec"
+	"screenrec/internal/winhide"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -110,8 +110,7 @@ func (a *App) startLocked(bin, gguf, base string, gpuLayers int) error {
 		"-t", "8",
 		"--alias", "local",
 	}
-	cmd := exec.Command(bin, args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	cmd := winhide.Command(bin, args...)
 	logFile := filepath.Join(a.dataDir, "llama-server.log")
 	if f, err := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644); err == nil {
 		cmd.Stdout = f

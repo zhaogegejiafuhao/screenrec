@@ -1,13 +1,14 @@
 package main
 
 import (
+	"os/exec"
+	"screenrec/internal/winhide"
 	"bufio"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -39,7 +40,7 @@ func (s *StreamASR) startLocked() error {
 	if _, err := os.Stat(script); err != nil {
 		return fmt.Errorf("缺少 asr_stream.py")
 	}
-	cmd := exec.Command(s.app.python, script)
+	cmd := winhide.Command(s.app.python, script)
 	cmd.Dir = s.app.assets
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

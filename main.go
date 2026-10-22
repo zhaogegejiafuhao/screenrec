@@ -1,6 +1,7 @@
 package main
 
 import (
+	"screenrec/internal/winhide"
 	"context"
 	"embed"
 	"errors"
@@ -9,7 +10,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
@@ -298,7 +298,7 @@ func openBrowser(url string) {
 	default:
 		cmd, args = "xdg-open", []string{url}
 	}
-	exec.Command(cmd, args...).Run()
+	winhide.Command(cmd, args...).Run()
 }
 
 // teeWriter 日志双写：stderr 写失败（GUI 版没有控制台）不影响文件写入

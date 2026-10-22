@@ -13,6 +13,7 @@
 package main
 
 import (
+	"screenrec/internal/winhide"
 	"archive/zip"
 	"bytes"
 	"encoding/base64"
@@ -21,7 +22,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -239,7 +239,7 @@ func doInstall(dir string, silent, noLaunch bool) {
 	fmt.Printf("  程序：%s\n", exePath)
 	fmt.Printf("  数据：%s\n", filepath.Join(dir, "data", "recordings"))
 	if !noLaunch {
-		cmd := exec.Command(exePath, "-open")
+		cmd := winhide.Command(exePath, "-open")
 		cmd.Dir = dir
 		if err := cmd.Start(); err != nil {
 			fmt.Println("启动失败，请手动双击：", err)
@@ -435,15 +435,14 @@ func doUninstall(silent bool) {
 		killApp()
 	}
 	removeShortcuts()
-	_ = exec.Command("reg", "delete", regKey, "/f").Run()
+	_ = winhide.Command("reg", "delete", regKey, "/f").Run()
 	fmt.Println("已删除快捷方式与卸载项，正在清理程序目录…")
 
 	// 自己就在安装目录里，删不掉自己：复制一份到临时目录，由它来删整个目录
 	self2, _ := os.Executable()
 	tmp := filepath.Join(os.TempDir(), fmt.Sprintf("screenrec-uninstall-%d.exe", os.Getpid()))
 	if err := copyFile(self2, tmp); err == nil {
-		c := exec.Command(tmp, "-purge", dir)
-		c.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		c := winhide.Command(tmp, "-purge", dir)
 		if err := c.Start(); err == nil {
 			if !silent {
 				fmt.Println("卸载完成。")
@@ -489,7 +488,7 @@ func looksInstalled(dir string) bool {
 
 // installLocation 从卸载项里读安装目录
 func installLocation() string {
-	out, err := exec.Command("reg", "query", regKey, "/v", "InstallLocation").Output()
+	out, err := winhide.Command("reg", "query", regKey, "/v", "InstallLocation").Output()
 	if err != nil {
 		return ""
 	}
@@ -509,7 +508,7 @@ func installLocation() string {
 func runPS(script string) error {
 	script = "$ProgressPreference = 'SilentlyContinue'\n" + script
 	enc := base64.StdEncoding.EncodeToString(utf16le(script))
-	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive",
+	cmd := winhide.Command("powershell", "-NoProfile", "-NonInteractive",
 		"-ExecutionPolicy", "Bypass", "-EncodedCommand", enc)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	return cmd.Run()
@@ -526,7 +525,7 @@ func utf16le(s string) []byte {
 }
 
 func isRunning(name string) bool {
-	out, err := exec.Command("tasklist", "/FI", "IMAGENAME eq "+name, "/NH").Output()
+	out, err := winhide.Command("tasklist", "/FI", "IMAGENAME eq "+name, "/NH").Output()
 	if err != nil {
 		return false
 	}
@@ -534,7 +533,7 @@ func isRunning(name string) bool {
 }
 
 func killApp() {
-	_ = exec.Command("taskkill", "/F", "/IM", appExe).Run()
+	_ = winhide.Command("taskkill", "/F", "/IM", appExe).Run()
 	time.Sleep(800 * time.Millisecond)
 }
 

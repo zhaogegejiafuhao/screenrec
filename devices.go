@@ -1,10 +1,11 @@
 package main
 
 import (
+	"os/exec"
+	"screenrec/internal/winhide"
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -138,7 +139,7 @@ func listDevices(ff string) []Device {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, ff, "-hide_banner", "-f", "dshow", "-list_devices", "true", "-i", "dummy")
+	cmd := winhide.CommandContext(ctx, ff, "-hide_banner", "-f", "dshow", "-list_devices", "true", "-i", "dummy")
 	cmd.Dir = filepath.Dir(ff)
 	out, _ := cmd.CombinedOutput()
 	var devs []Device
@@ -178,7 +179,7 @@ func probeScreens(ff string) []int {
 			defer wg.Done()
 			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 			defer cancel()
-			cmd := exec.CommandContext(ctx, ff, "-hide_banner", "-loglevel", "error",
+			cmd := winhide.CommandContext(ctx, ff, "-hide_banner", "-loglevel", "error",
 				"-f", "lavfi", "-i", fmt.Sprintf("ddagrab=%d:framerate=5", idx),
 				"-frames:v", "1", "-f", "null", "-")
 			cmd.Dir = filepath.Dir(ff)
@@ -205,7 +206,7 @@ func probeDuration(probe, path string) int64 {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, probe, "-v", "error",
+	cmd := winhide.CommandContext(ctx, probe, "-v", "error",
 		"-show_entries", "format=duration", "-of", "default=nw=1:nk=1", path)
 	cmd.Dir = filepath.Dir(probe)
 	out, err := cmd.Output()

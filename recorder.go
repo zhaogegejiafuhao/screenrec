@@ -1,12 +1,13 @@
 package main
 
 import (
+	"os/exec"
+	"screenrec/internal/winhide"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -224,7 +225,7 @@ func (r *Recorder) Start(opt StartOptions) (*Recording, error) {
 	var leadMs int64
 	for _, e := range encoders {
 		args := buildRecordArgs(opt, outFile, pcmFile, e)
-		c := exec.Command(r.app.ffmpeg, args...)
+		c := winhide.Command(r.app.ffmpeg, args...)
 		c.Dir = filepath.Dir(r.app.ffmpeg)
 		in, err := c.StdinPipe()
 		if err != nil {

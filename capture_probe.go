@@ -10,9 +10,9 @@ package main
 // 微信窗口 225.7），两者区分度极大，取 22 作阈值。
 
 import (
+	"screenrec/internal/winhide"
 	"context"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -41,7 +41,7 @@ func probeLuma(ff string, inArgs []string, hw bool) (float64, bool) {
 	args := append([]string{"-hide_banner"}, inArgs...)
 	args = append(args, "-frames:v", "3", "-vf", vf, "-f", "null", "-")
 
-	cmd := exec.CommandContext(ctx, ff, args...)
+	cmd := winhide.CommandContext(ctx, ff, args...)
 	cmd.Dir = filepath.Dir(ff)
 	out, _ := cmd.CombinedOutput()
 

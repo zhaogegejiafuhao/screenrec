@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os/exec"
+	"screenrec/internal/winhide"
 	"bufio"
 	"context"
 	"encoding/binary"
@@ -9,7 +11,6 @@ import (
 	"io"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -48,7 +49,7 @@ func (a *ASR) startLocked() error {
 	if _, err := os.Stat(script); err != nil {
 		return fmt.Errorf("找不到 asr_worker.py: %s", script)
 	}
-	cmd := exec.Command(a.app.python, script)
+	cmd := winhide.Command(a.app.python, script)
 	cmd.Dir = a.app.assets
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -126,7 +127,7 @@ func (a *ASR) Batch(mediaPath string) ([]Segment, error) {
 	wavPath := filepath.Join(tmpDir, "audio16k.wav")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, a.app.ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+	cmd := winhide.CommandContext(ctx, a.app.ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
 		"-i", mediaPath, "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", wavPath)
 	cmd.Dir = filepath.Dir(a.app.ffmpeg)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -136,7 +137,7 @@ func (a *ASR) Batch(mediaPath string) ([]Segment, error) {
 	script := filepath.Join(a.app.assets, "asr.py")
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 60*time.Minute)
 	defer cancel2()
-	c2 := exec.CommandContext(ctx2, a.app.python, script, wavPath)
+	c2 := winhide.CommandContext(ctx2, a.app.python, script, wavPath)
 	c2.Dir = a.app.assets
 	out, err := c2.Output()
 	if err != nil {
@@ -183,7 +184,7 @@ func (a *App) mergeMedia(paths []string) (string, func(), error) {
 	merged := filepath.Join(tmpDir, "merged.m4a")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, a.ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+	cmd := winhide.CommandContext(ctx, a.ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
 		"-f", "concat", "-safe", "0", "-i", listPath,
 		"-vn", "-c:a", "aac", "-b:a", "128k", merged)
 	cmd.Dir = filepath.Dir(a.ffmpeg)

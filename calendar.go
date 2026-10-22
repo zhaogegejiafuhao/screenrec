@@ -7,18 +7,17 @@ package main
 // 前面几句已经说完了。日历是事前已知的，能提前就位。
 
 import (
+	"screenrec/internal/winhide"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -508,9 +507,8 @@ func exportOutlookICS() ([]byte, error) {
 	if err := os.WriteFile(ps1, []byte(outlookScript), 0644); err != nil {
 		return nil, err
 	}
-	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+	cmd := winhide.Command("powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
 		"-File", ps1, out)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	b, _ := cmd.CombinedOutput()
 	data, rerr := os.ReadFile(out)
 	if rerr != nil || len(strings.TrimSpace(string(data))) == 0 {

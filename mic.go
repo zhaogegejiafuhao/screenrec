@@ -1,11 +1,11 @@
 package main
 
 import (
+	"screenrec/internal/winhide"
 	"context"
 	"encoding/binary"
 	"fmt"
 	"math"
-	"os/exec"
 	"path/filepath"
 	"sync"
 	"time"
@@ -37,7 +37,7 @@ func detectEncoder(ff string) string {
 	if ff != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		cmd := exec.CommandContext(ctx, ff, "-hide_banner", "-loglevel", "error",
+		cmd := winhide.CommandContext(ctx, ff, "-hide_banner", "-loglevel", "error",
 			"-f", "lavfi", "-i", "testsrc=size=320x240:rate=5", "-t", "0.4",
 			"-c:v", "h264_nvenc", "-f", "null", "-")
 		cmd.Dir = filepath.Dir(ff)
@@ -59,7 +59,7 @@ func (a *App) sampleMic(mic string, dur time.Duration) (*LevelInfo, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), dur+15*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, a.ffmpeg, "-hide_banner", "-loglevel", "error",
+	cmd := winhide.CommandContext(ctx, a.ffmpeg, "-hide_banner", "-loglevel", "error",
 		"-f", "dshow", "-i", "audio="+mic,
 		"-t", fmt.Sprintf("%.2f", dur.Seconds()),
 		"-f", "s16le", "-ar", "16000", "-ac", "1", "pipe:1")
