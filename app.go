@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -35,6 +36,9 @@ type App struct {
 	quit       chan struct{}
 	ltMu       sync.Mutex
 	lt         *liveMT
+	idxMu      sync.Mutex
+	idx        *searchIndex
+	llm        localLLM
 }
 
 // RequestQuit 请求退出（托盘菜单用）
@@ -208,6 +212,60 @@ func (a *App) get(id string) (*Recording, bool) {
 	return r, ok
 }
 
+// syncFromDisk 把磁盘上有、内存里没有的记录补进内存。
+// 记录文件可能是外部放的（评测工具、手工拷贝、从别的机器搬过来的），
+// 只做一次目录列举，已经在内存里的不动，所以每次列表调用都很便宜。
+func (a *App) syncFromDisk() {
+	entries, err := os.ReadDir(a.recordsDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
+			continue
+		}
+		id := strings.TrimSuffix(e.Name(), ".json")
+		if _, ok := a.get(id); ok {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(a.recordsDir, e.Name()))
+		if err != nil {
+			continue
+		}
+		var r Recording
+		if json.Unmarshal(b, &r) != nil || r.ID == "" {
+			continue
+		}
+		if r.Status == "recording" {
+			r.Status = "error"
+			r.Error = "程序退出导致录制中断"
+		}
+		a.put(&r)
+	}
+}
+
+// getOrLoad 内存里没有就去磁盘上找一次。
+// 记录文件可能是外部放的（评测工具会直接写 recordings/ 目录），
+// 找不到就退回 404，不因为这一条把整个列表拖慢。
+func (a *App) getOrLoad(id string) (*Recording, bool) {
+	if rec, ok := a.get(id); ok {
+		return rec, true
+	}
+	if id == "" || strings.ContainsAny(id, `/\.:`) {
+		return nil, false
+	}
+	b, err := os.ReadFile(filepath.Join(a.recordsDir, id+".json"))
+	if err != nil {
+		return nil, false
+	}
+	var r Recording
+	if json.Unmarshal(b, &r) != nil || r.ID != id {
+		return nil, false
+	}
+	a.put(&r)
+	return &r, true
+}
+
 func (a *App) put(r *Recording) {
 	a.mu.Lock()
 	a.recordings[r.ID] = r
@@ -314,6 +372,7 @@ func (a *App) autoTranscribe(rec *Recording) {
 	}
 	a.mu.Unlock()
 	a.recorder.save(rec)
+	go a.RebuildSearchIndex(rec.ID) // 让搜索立刻能查到新转写
 
 	// 转写成功后删除中间 PCM，节省空间
 	if err == nil && rec.PCMFile != "" {

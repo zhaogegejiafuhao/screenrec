@@ -16,7 +16,7 @@ labels speakers, translates bilingual subtitles, and exports meeting notes to Ma
 - **Speaker diarization** (pyannote segmentation + 3D-Speaker embeddings)
 - **Bilingual subtitles** with a fully offline MarianMT model, plus a glossary that keeps technical terms intact
 - **Export** to Markdown / Word (hand-written OOXML, no dependencies), with optional spoken-math → `x² + y² = c²` normalization
-- **AI summary** (optional): any OpenAI-compatible endpoint (DeepSeek, Qwen, local Ollama) → decisions and action items
+- **AI summary**: three engines — cloud (any OpenAI-compatible endpoint), local (llama.cpp + Qwen3-4B GGUF, fully offline), or rule-based. Auto picks the best available
 - **Live bilingual subtitles**: each finished sentence is translated locally (~0.3s warm) and shown as a second line
 - **Voice cloning voice-over** (optional): calls a local GPT-SoVITS server to read the transcript in your own voice
 - **Meeting reminder** when a known conferencing app starts using the microphone

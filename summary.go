@@ -1,7 +1,8 @@
 package main
 
-// AI 纪要：把转写内容交给 OpenAI 兼容接口（DeepSeek / 通义 / Kimi / 本地 Ollama），
-// 生成「总结 / 议题 / 结论 / 待办 / 风险」。只发文本，不发音频，且需要用户自己填 Key。
+// AI 纪要：把转写内容交给 OpenAI 兼容接口（DeepSeek / 通义 / Kimi / 本地 llama.cpp），
+// 生成「总结 / 议题 / 结论 / 待办 / 风险」。只发文本，不发音频。
+// 云端要用户自己填 Key；本机模型不用联网；两者都没有时退到规则抽取。
 
 import (
 	"bytes"
@@ -9,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -74,14 +76,23 @@ type chatMessage struct {
 
 // chatCompletion 调用 OpenAI 兼容的 /chat/completions
 func chatCompletion(ctx context.Context, base, key, model string, messages []chatMessage) (string, error) {
+	return chatCompletionEx(ctx, base, key, model, messages, 180*time.Second, nil)
+}
+
+// chatCompletionEx 同上，但可指定超时和额外的请求字段（本地模型要用）
+func chatCompletionEx(ctx context.Context, base, key, model string, messages []chatMessage, timeout time.Duration, extra map[string]any) (string, error) {
 	url := strings.TrimRight(base, "/") + "/chat/completions"
-	payload, _ := json.Marshal(map[string]any{
+	payloadMap := map[string]any{
 		"model":       model,
 		"messages":    messages,
 		"temperature": 0.3,
 		"max_tokens":  1800,
 		"stream":      false,
-	})
+	}
+	for k, v := range extra {
+		payloadMap[k] = v
+	}
+	payload, _ := json.Marshal(payloadMap)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(payload))
 	if err != nil {
@@ -92,7 +103,10 @@ func chatCompletion(ctx context.Context, base, key, model string, messages []cha
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 
-	resp, err := (&http.Client{Timeout: 180 * time.Second}).Do(req)
+	if timeout <= 0 {
+		timeout = 180 * time.Second
+	}
+	resp, err := (&http.Client{Timeout: timeout}).Do(req)
 	if err != nil {
 		return "", fmt.Errorf("连不上接口：%v", err)
 	}
@@ -136,24 +150,72 @@ func chatCompletion(ctx context.Context, base, key, model string, messages []cha
 }
 
 // summarizeRecord 生成纪要并写回记录。
-// 没配 Key 时退到本地规则抽取，保证「不联网也能出纪要」。
+//
+// 引擎优先级由设置决定：
+//   - cloud：只用云端 API（没 Key 直接报错，不偷偷改用别的）
+//   - local：只用本机 llama.cpp（没起来就尝试拉起，拉不起来报错）
+//   - off  ：不联网、不跑模型，纯规则抽取
+//   - auto ：本地模型能用就用（完全离线最快），否则有 Key 用云端，都没有走规则
 func (a *App) summarizeRecord(rec *Recording) (string, error) {
-	base, key, model := a.set.LLM()
-	if key == "" {
-		content, err := a.localSummary(rec)
-		if err != nil {
-			return "", err
+	engine, base, key, model, localURL, localModel, localBin, localGGUF, gpuLayers := a.set.LLMEngineConfig()
+
+	useLocal := false
+	switch engine {
+	case "local":
+		useLocal = true
+	case "cloud":
+		useLocal = false
+	case "off":
+		return a.writeLocalSummary(rec)
+	default: // auto
+		if localBin != "" || localGGUF != "" || a.localLLMUp(localURL) {
+			useLocal = true
+		} else {
+			useLocal = false
 		}
-		now := time.Now()
-		a.mu.Lock()
-		rec.Summary = content
-		rec.SummaryModel = "本地抽取"
-		rec.SummaryAt = &now
-		a.mu.Unlock()
-		a.recorder.save(rec)
-		return content, nil
 	}
 
+	// 本地优先：能用就用，用不了再退云端；明确选了 local 就不退
+	if useLocal {
+		if err := a.ensureLocalLLM(localBin, localGGUF, localURL, gpuLayers); err == nil {
+			content, err := a.modelSummary(rec, localURL, "", localModel, localTimeout, localChatExtra, "本地模型 "+localModel)
+			if err == nil {
+				return content, nil
+			}
+			if engine == "local" {
+				return "", err
+			}
+			log.Printf("[llm] 本地模型失败，改用云端：%v", err)
+		} else if engine == "local" {
+			return "", err
+		} else {
+			log.Printf("[llm] 本地模型不可用，改用云端：%v", err)
+		}
+	}
+
+	if key == "" {
+		if engine == "cloud" {
+			return "", fmt.Errorf("选了云端纪要但没填 API Key")
+		}
+		return a.writeLocalSummary(rec)
+	}
+
+	content, err := a.modelSummary(rec, base, key, model, 180*time.Second, nil, model)
+	if err != nil {
+		return "", err
+	}
+	return content, nil
+}
+
+// localTimeout 本地 4B 模型生成一段纪要的时间；CPU 上可能更久，给足 10 分钟
+const localTimeout = 600 * time.Second
+
+// localChatExtra 关掉 Qwen3 的思考过程：纪要要的是结果，不要长篇推理
+var localChatExtra = map[string]any{
+	"chat_template_kwargs": map[string]any{"enable_thinking": false},
+}
+
+func (a *App) modelSummary(rec *Recording, base, key, model string, timeout time.Duration, extra map[string]any, label string) (string, error) {
 	a.mu.RLock()
 	snap := *rec
 	snap.Segments = append([]Segment{}, rec.Segments...)
@@ -164,13 +226,13 @@ func (a *App) summarizeRecord(rec *Recording) (string, error) {
 	}
 
 	input, truncated := buildSummaryInput(&snap, 14000)
-	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	content, err := chatCompletion(ctx, base, key, model, []chatMessage{
+	content, err := chatCompletionEx(ctx, base, key, model, []chatMessage{
 		{Role: "system", Content: summaryPrompt},
 		{Role: "user", Content: input},
-	})
+	}, timeout, extra)
 	if err != nil {
 		return "", err
 	}
@@ -181,10 +243,25 @@ func (a *App) summarizeRecord(rec *Recording) (string, error) {
 	now := time.Now()
 	a.mu.Lock()
 	rec.Summary = content
-	rec.SummaryModel = model
+	rec.SummaryModel = label
 	rec.SummaryAt = &now
 	a.mu.Unlock()
 	a.recorder.save(rec)
+	return content, nil
+}
 
+// writeLocalSummary 规则抽取版纪要，写回记录
+func (a *App) writeLocalSummary(rec *Recording) (string, error) {
+	content, err := a.localSummary(rec)
+	if err != nil {
+		return "", err
+	}
+	now := time.Now()
+	a.mu.Lock()
+	rec.Summary = content
+	rec.SummaryModel = "本地抽取（规则）"
+	rec.SummaryAt = &now
+	a.mu.Unlock()
+	a.recorder.save(rec)
 	return content, nil
 }

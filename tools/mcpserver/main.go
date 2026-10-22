@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -22,7 +23,7 @@ import (
 var (
 	baseURL   = "http://127.0.0.1:8790"
 	httpCli   = &http.Client{Timeout: 120 * time.Second}
-	serverVer = "0.4.0"
+	serverVer = "0.5.0"
 )
 
 type rpcReq struct {
@@ -389,22 +390,58 @@ func toolTranscript(args map[string]any) (string, bool) {
 }
 
 func toolSearch(args map[string]any) (string, bool) {
-	q := strings.ToLower(strings.TrimSpace(strArg(args, "query")))
+	q := strings.TrimSpace(strArg(args, "query"))
 	if q == "" {
 		return "缺少参数 query", true
 	}
 	limit := intArg(args, "limit", 20)
-	body, err := apiGet("/api/recordings")
+
+	// 优先走服务端索引（一次请求搞定，上百条记录也不用一条条拉详情）
+	type idxHit struct {
+		ID    string  `json:"id"`
+		Title string  `json:"title"`
+		Start float64 `json:"start"`
+		Text  string  `json:"text"`
+		Trans string  `json:"trans,omitempty"`
+	}
+	type idxResp struct {
+		Count   int      `json:"count"`
+		Indexed int      `json:"indexed"`
+		Hits    []idxHit `json:"hits"`
+	}
+	body, err := apiGet("/api/search?q=" + url.QueryEscape(q) + "&limit=" + strconv.Itoa(limit))
+	if err == nil {
+		var out idxResp
+		if json.Unmarshal(body, &out) == nil {
+			if out.Count == 0 {
+				return fmt.Sprintf("没有找到包含「%s」的内容（已索引 %d 条记录）。", q, out.Indexed), false
+			}
+			var b strings.Builder
+			fmt.Fprintf(&b, "找到 %d 条：\n\n", out.Count)
+			for _, h := range out.Hits {
+				text := strings.TrimSpace(h.Text)
+				if len([]rune(text)) > 120 {
+					text = string([]rune(text)[:120]) + "…"
+				}
+				fmt.Fprintf(&b, "- %s · %s · %s\n  %s\n", h.Title, mmss(int64(h.Start*1000)), h.ID, text)
+			}
+			return b.String(), false
+		}
+	}
+
+	// 老版本服务端没有 /api/search，退回逐条读取（只取前 40 条，避免太慢）
+	listBody, err := apiGet("/api/recordings")
 	if err != nil {
 		return err.Error(), true
 	}
 	var list []recInfo
-	if err := json.Unmarshal(body, &list); err != nil {
+	if err := json.Unmarshal(listBody, &list); err != nil {
 		return "解析记录列表失败", true
 	}
 	if len(list) > 40 {
 		list = list[:40]
 	}
+	ql := strings.ToLower(q)
 	type found struct {
 		title string
 		id    string
@@ -425,7 +462,7 @@ func toolSearch(args map[string]any) (string, bool) {
 			continue
 		}
 		for _, s := range r.Segments {
-			if strings.Contains(strings.ToLower(s.Text), q) {
+			if strings.Contains(strings.ToLower(s.Text), ql) {
 				hits = append(hits, found{r.Title, r.ID, s.Start, strings.TrimSpace(s.Text)})
 				if len(hits) >= limit {
 					break

@@ -150,6 +150,7 @@ func main() {	setupDPI()
 		}
 		app.overlay.removeTray()
 		app.recorder.Stop()
+		app.StopLocalLLM() // 自己拉起的本地模型服务不留后台
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		srv.Shutdown(ctx)

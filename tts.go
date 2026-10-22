@@ -46,44 +46,84 @@ func (a *App) synthesizeSpeech(rec *Recording, text string) (string, error) {
 		truncated = true
 	}
 
-	payload, _ := json.Marshal(map[string]any{
-		"text":            text,
-		"text_language":   lang,
-		"refer_wav_path":  ref,
-		"prompt_text":     prompt,
-		"prompt_language": lang,
-		"top_k":           15,
-		"top_p":           1,
-		"temperature":     1,
-		"speed":           1.0,
-		"if_sr":           false,
-		"cut_punc":        "，。！？",
-	})
-	url := strings.TrimRight(base, "/") + "/"
+	// GPT-SoVITS 有两代接口，参数名不一样：
+	//   api_v2.py（v2pro 版自带）走 POST /tts，字段叫 text_lang / ref_audio_path
+	//   老 api.py 走 POST /，字段叫 text_language / refer_wav_path
+	// 先试新的，不行再退回老的，两边都能用。
+	base = strings.TrimRight(base, "/")
+	attempts := []struct {
+		url     string
+		payload map[string]any
+	}{
+		{
+			url: base + "/tts",
+			payload: map[string]any{
+				"text":            text,
+				"text_lang":       lang,
+				"ref_audio_path":  ref,
+				"prompt_text":     prompt,
+				"prompt_lang":     lang,
+				"top_k":           15,
+				"top_p":           1,
+				"temperature":     1,
+				"speed":           1.0,
+				"media_type":      "wav",
+				"text_split_method": "cut5",
+			},
+		},
+		{
+			url: base + "/",
+			payload: map[string]any{
+				"text":            text,
+				"text_language":   lang,
+				"refer_wav_path":  ref,
+				"prompt_text":     prompt,
+				"prompt_language": lang,
+				"top_k":           15,
+				"top_p":           1,
+				"temperature":     1,
+				"speed":           1.0,
+				"if_sr":           false,
+				"cut_punc":        "，。！？",
+			},
+		},
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(payload))
-	if err != nil {
-		return "", fmt.Errorf("接口地址无效：%v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
+	cli := &http.Client{Timeout: 10 * time.Minute}
 
-	resp, err := (&http.Client{Timeout: 10 * time.Minute}).Do(req)
-	if err != nil {
-		return "", fmt.Errorf("连不上 GPT-SoVITS：%v（先双击「启动API.bat」）", err)
+	var audio []byte
+	var lastErr error
+	for _, at := range attempts {
+		payload, _ := json.Marshal(at.payload)
+		req, err := http.NewRequestWithContext(ctx, "POST", at.url, bytes.NewReader(payload))
+		if err != nil {
+			lastErr = fmt.Errorf("接口地址无效：%v", err)
+			continue
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := cli.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("连不上 GPT-SoVITS：%v（先启动 api_v2.py）", err)
+			continue
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 100<<20))
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			lastErr = fmt.Errorf("合成失败（%d）：%s", resp.StatusCode, firstN(body, 200))
+			continue
+		}
+		if len(body) < 1000 {
+			lastErr = fmt.Errorf("返回内容不像音频（%d 字节）", len(body))
+			continue
+		}
+		audio = body
+		lastErr = nil
+		break
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return "", fmt.Errorf("合成失败（%d）：%s", resp.StatusCode, firstN(body, 200))
-	}
-	audio, err := io.ReadAll(io.LimitReader(resp.Body, 100<<20))
-	if err != nil {
-		return "", err
-	}
-	if len(audio) < 1000 {
-		return "", fmt.Errorf("返回内容不像音频（%d 字节）", len(audio))
+	if lastErr != nil {
+		return "", lastErr
 	}
 
 	out := filepath.Join(a.recordsDir, rec.ID+"-tts.wav")

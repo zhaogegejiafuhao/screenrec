@@ -34,6 +34,15 @@ type Settings struct {
 	LLMAPIKey  string `json:"llmApiKey"`
 	LLMModel   string `json:"llmModel"`
 
+	// AI 纪要引擎：auto（有本地模型用本地，有 Key 用云端，都没有走规则）/
+	// cloud（只用云端 API）/ local（只用本机 llama.cpp）/ off（不用模型，纯规则抽取）
+	LLMEngine      string `json:"llmEngine"`
+	LLMLocalURL    string `json:"llmLocalUrl"`    // 本地 llama.cpp server，默认 http://127.0.0.1:8080/v1
+	LLMLocalModel  string `json:"llmLocalModel"`  // 填什么都行，llama.cpp 以加载的模型为准
+	LLMLocalBin    string `json:"llmLocalBin"`    // llama-server.exe 路径（填了才会自动拉起）
+	LLMLocalGGUF   string `json:"llmLocalGguf"`   // .gguf 模型路径（Qwen3-4B-Q4_K_M 等）
+	LLMLocalGPULay int    `json:"llmLocalGpuLay"` // 放 GPU 的层数，-1=全部；显存小就调小
+
 	// 实时双语字幕
 	LiveTranslate bool   `json:"liveTranslate"`
 	LiveTransDir  string `json:"liveTransDir"` // auto / en2zh / zh2en
@@ -54,8 +63,9 @@ type Settings struct {
 }
 
 const (
-	defaultLLMBase  = "https://api.deepseek.com/v1"
-	defaultLLMModel = "deepseek-chat"
+	defaultLLMBase     = "https://api.deepseek.com/v1"
+	defaultLLMModel    = "deepseek-chat"
+	defaultLLMLocalURL = "http://127.0.0.1:8080/v1"
 )
 
 // LLM 返回接口配置，空值时给默认（DeepSeek）
@@ -90,6 +100,60 @@ func (s *Settings) HasLLMKey() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.LLMAPIKey != ""
+}
+
+// LLMEngineConfig 返回纪要引擎配置（engine, base, key, model, localURL, localModel, localBin, localGGUF, gpuLayers）
+func (s *Settings) LLMEngineConfig() (engine, base, key, model, localURL, localModel, localBin, localGGUF string, gpuLayers int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	engine = s.LLMEngine
+	if engine == "" {
+		engine = "auto"
+	}
+	base, key, model = s.LLMBaseURL, s.LLMAPIKey, s.LLMModel
+	if base == "" {
+		base = defaultLLMBase
+	}
+	if model == "" {
+		model = defaultLLMModel
+	}
+	localURL, localModel = s.LLMLocalURL, s.LLMLocalModel
+	if localURL == "" {
+		localURL = defaultLLMLocalURL
+	}
+	if localModel == "" {
+		localModel = "local"
+	}
+	localBin, localGGUF, gpuLayers = s.LLMLocalBin, s.LLMLocalGGUF, s.LLMLocalGPULay
+	if gpuLayers == 0 {
+		gpuLayers = -1 // -1 表示尽量都放 GPU
+	}
+	return
+}
+
+// SetLLMEngine 保存纪要引擎配置，空值表示保持原样
+func (s *Settings) SetLLMEngine(engine, localURL, localModel, localBin, localGGUF string, gpuLayers int) {
+	s.mu.Lock()
+	if engine != "" {
+		s.LLMEngine = engine
+	}
+	if localURL != "" {
+		s.LLMLocalURL = localURL
+	}
+	if localModel != "" {
+		s.LLMLocalModel = localModel
+	}
+	if localBin != "" {
+		s.LLMLocalBin = localBin
+	}
+	if localGGUF != "" {
+		s.LLMLocalGGUF = localGGUF
+	}
+	if gpuLayers != 0 {
+		s.LLMLocalGPULay = gpuLayers
+	}
+	s.mu.Unlock()
+	s.save()
 }
 
 // CalendarConfig 返回日历相关配置（enabled, source, leadMin, autoStart, autoStop, mode）

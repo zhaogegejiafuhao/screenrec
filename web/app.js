@@ -101,7 +101,12 @@ async function loadState() {
     $('autoChk').checked = !!s.settings.autoStart;
     $('llmBase').value = s.settings.llmBaseUrl || '';
     $('llmModel').value = s.settings.llmModel || '';
-    $('llmState').textContent = s.settings.llmKeySet ? '已配置 API Key' : '未配置 API Key（AI 纪要需要）';
+    $('llmEngine').value = s.settings.llmEngine || 'auto';
+    $('llmLocalUrl').value = s.settings.llmLocalUrl || '';
+    $('llmLocalBin').value = s.settings.llmLocalBin || '';
+    $('llmLocalGguf').value = s.settings.llmLocalGguf || '';
+    $('llmLocalGpu').value = s.settings.llmLocalGpuLay || -1;
+    $('llmState').textContent = llmStateText(s.settings);
     $('ltChk').checked = !!s.settings.liveTranslate;
     $('ltDir').value = s.settings.liveTransDir || 'auto';
     $('ttsUrl').value = s.settings.ttsUrl || '';
@@ -657,10 +662,33 @@ async function summarize() {
   }
 }
 
+// 一句话说清当前纪要走哪条路：本机模型 / 云端 / 规则
+function llmStateText(s) {
+  const eng = s.llmEngine || 'auto';
+  const localOK = !!s.llmLocalReady;
+  const cloudOK = !!s.llmKeySet;
+  let use = '规则抽取';
+  if (eng === 'local') use = localOK ? '本机模型' : '本机模型（未就绪）';
+  else if (eng === 'cloud') use = cloudOK ? '云端 API' : '云端 API（缺 Key）';
+  else if (eng === 'off') use = '规则抽取';
+  else use = localOK ? '本机模型' : (cloudOK ? '云端 API' : '规则抽取');
+  const parts = ['当前：' + use];
+  if (localOK) parts.push('本机已就绪');
+  else if (s.llmLocalHasGguf) parts.push('本机模型已配置，未启动');
+  if (cloudOK) parts.push('云端 Key 已填');
+  if (eng !== 'local' && !localOK && !cloudOK) parts.push('装本机模型或填 Key 可出更完整纪要');
+  return parts.join(' · ');
+}
+
 async function saveLLM(clear) {
   const body = {
     llmBaseUrl: $('llmBase').value.trim(),
     llmModel: $('llmModel').value.trim(),
+    llmEngine: $('llmEngine').value,
+    llmLocalUrl: $('llmLocalUrl').value.trim(),
+    llmLocalBin: $('llmLocalBin').value.trim(),
+    llmLocalGguf: $('llmLocalGguf').value.trim(),
+    llmLocalGpuLay: parseInt($('llmLocalGpu').value, 10) || -1,
   };
   if (clear) body.llmApiKey = '-';
   else if ($('llmKey').value.trim()) body.llmApiKey = $('llmKey').value.trim();
@@ -673,9 +701,38 @@ async function saveLLM(clear) {
     });
     settingsCache = s;
     $('llmKey').value = '';
-    $('llmState').textContent = s.llmKeySet ? '已配置 API Key' : '未配置 API Key（AI 纪要需要）';
+    $('llmState').textContent = llmStateText(s);
     toast(clear ? '已清除 API Key' : '已保存');
   } catch (e) { toast(e.message, 'err'); }
+}
+
+// 测本机模型：拉起服务并说一句话，顺便让用户知道大概多快
+async function testLocalLLM() {
+  const btn = $('llmLocalTest');
+  btn.disabled = true;
+  const old = btn.textContent;
+  btn.textContent = '测试中…';
+  try {
+    await api('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        llmLocalUrl: $('llmLocalUrl').value.trim(),
+        llmLocalBin: $('llmLocalBin').value.trim(),
+        llmLocalGguf: $('llmLocalGguf').value.trim(),
+        llmLocalGpuLay: parseInt($('llmLocalGpu').value, 10) || -1,
+      }),
+    });
+    const r = await api('/api/llm/local/test', { method: 'POST' });
+    $('llmState').textContent = `本机模型可用 · 响应 ${(r.ms / 1000).toFixed(1)}s · 模型 ${r.model || '-'}`;
+    toast(r.ok ? '本机模型可用' : '本机模型没回话', r.ok ? '' : 'err');
+  } catch (e) {
+    $('llmState').textContent = '本机模型不可用：' + e.message;
+    toast(e.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+  }
 }
 
 async function saveLiveTrans() {
@@ -898,6 +955,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('ttsSave').onclick = saveTTS;
   $('llmSave').onclick = () => saveLLM(false);
   $('llmClear').onclick = () => saveLLM(true);
+  if ($('llmLocalTest')) $('llmLocalTest').onclick = testLocalLLM;
+  if ($('llmEngine')) $('llmEngine').onchange = async () => {
+    const s = await api('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ llmEngine: $('llmEngine').value }),
+    });
+    settingsCache = s;
+    $('llmState').textContent = llmStateText(s);
+  };
   $('ltChk').onchange = saveLiveTrans;
   $('ltDir').onchange = saveLiveTrans;
   $('delBtn').onclick = del;

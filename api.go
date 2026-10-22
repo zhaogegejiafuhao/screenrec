@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -61,6 +63,8 @@ func (a *App) routes() http.Handler {
 	mux.HandleFunc("POST /api/recordings/{id}/summary", a.handleSummary)
 	mux.HandleFunc("POST /api/recordings/{id}/clip", a.handleClip)
 	mux.HandleFunc("GET /api/recordings/{id}/actions", a.handleActions)
+	mux.HandleFunc("GET /api/search", a.handleSearch)
+	mux.HandleFunc("POST /api/llm/local/test", a.handleLLMLocalTest)
 	mux.HandleFunc("GET /api/calendar", a.handleCalendar)
 	mux.HandleFunc("POST /api/calendar/refresh", a.handleCalendarRefresh)
 	mux.HandleFunc("POST /api/recordings/{id}/tts", a.handleTTS)
@@ -100,11 +104,34 @@ func (a *App) handleState(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func strPtrVal(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
+
+func intPtrVal(p *int) int {
+	if p == nil {
+		return 0
+	}
+	return *p
+}
+
+func fileExists(p string) bool {
+	if p == "" {
+		return false
+	}
+	st, err := os.Stat(p)
+	return err == nil && !st.IsDir()
+}
+
 func (a *App) settingsView() map[string]any {
 	llmBase, _, llmModel := a.set.LLM()
 	ltOn, ltDir := a.set.LiveTransConfig()
 	ttsURL, ttsRef, ttsPrompt, ttsLang := a.set.TTSConfig()
 	calEnabled, calSource, leadMin, calAutoStart, calAutoStop, calMode := a.set.CalendarConfig()
+	engine, _, _, _, localURL, localModel, localBin, localGGUF, gpuLayers := a.set.LLMEngineConfig()
 	return map[string]any{
 		"consentAccepted": a.set.ConsentOK(),
 		"meetingPrompt":   a.set.MeetingEnabled(),
@@ -114,6 +141,15 @@ func (a *App) settingsView() map[string]any {
 		"llmBaseUrl":      llmBase,
 		"llmModel":        llmModel,
 		"llmKeySet":       a.set.HasLLMKey(),
+		"llmEngine":       engine,
+		"llmLocalUrl":     localURL,
+		"llmLocalModel":   localModel,
+		"llmLocalBin":     localBin,
+		"llmLocalGguf":    localGGUF,
+		"llmLocalGpuLay":  gpuLayers,
+		"llmLocalReady":   a.localLLMUp(localURL),
+		"llmLocalHasBin":  localBin != "" && fileExists(localBin),
+		"llmLocalHasGguf": localGGUF != "" && fileExists(localGGUF),
 		"liveTranslate":   ltOn,
 		"liveTransDir":    ltDir,
 		"ttsUrl":          ttsURL,
@@ -187,6 +223,12 @@ func (a *App) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		CalAutoStart   *bool   `json:"calAutoStart"`
 		CalAutoStop    *bool   `json:"calAutoStop"`
 		CalMode        *string `json:"calMode"`
+		LLMEngine      *string `json:"llmEngine"`
+		LLMLocalURL    *string `json:"llmLocalUrl"`
+		LLMLocalModel  *string `json:"llmLocalModel"`
+		LLMLocalBin    *string `json:"llmLocalBin"`
+		LLMLocalGGUF   *string `json:"llmLocalGguf"`
+		LLMLocalGPULay *int    `json:"llmLocalGpuLay"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, 400, "请求格式错误")
@@ -221,6 +263,17 @@ func (a *App) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		a.set.SetCalendar(enabled, source, lead, autoStart, autoStop, mode)
 		go a.calendar.Refresh()
+	}
+	if req.LLMEngine != nil || req.LLMLocalURL != nil || req.LLMLocalModel != nil ||
+		req.LLMLocalBin != nil || req.LLMLocalGGUF != nil || req.LLMLocalGPULay != nil {
+		a.set.SetLLMEngine(
+			strPtrVal(req.LLMEngine),
+			strPtrVal(req.LLMLocalURL),
+			strPtrVal(req.LLMLocalModel),
+			strPtrVal(req.LLMLocalBin),
+			strPtrVal(req.LLMLocalGGUF),
+			intPtrVal(req.LLMLocalGPULay),
+		)
 	}
 	if req.MeetingPrompt != nil {
 		a.set.SetMeetingEnabled(*req.MeetingPrompt)
@@ -408,11 +461,12 @@ func (a *App) handleLive(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleList(w http.ResponseWriter, r *http.Request) {
+	a.syncFromDisk()
 	writeJSON(w, 200, a.list())
 }
 
 func (a *App) handleGet(w http.ResponseWriter, r *http.Request) {
-	rec, ok := a.get(r.PathValue("id"))
+	rec, ok := a.getOrLoad(r.PathValue("id"))
 	if !ok {
 		writeErr(w, 404, "记录不存在")
 		return
@@ -424,7 +478,7 @@ func (a *App) handleGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleRename(w http.ResponseWriter, r *http.Request) {
-	rec, ok := a.get(r.PathValue("id"))
+	rec, ok := a.getOrLoad(r.PathValue("id"))
 	if !ok {
 		writeErr(w, 404, "记录不存在")
 		return
@@ -454,7 +508,7 @@ func (a *App) handleDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleRetranscribe(w http.ResponseWriter, r *http.Request) {
-	rec, ok := a.get(r.PathValue("id"))
+	rec, ok := a.getOrLoad(r.PathValue("id"))
 	if !ok {
 		writeErr(w, 404, "记录不存在")
 		return
@@ -466,7 +520,7 @@ func (a *App) handleRetranscribe(w http.ResponseWriter, r *http.Request) {
 
 // handleDiarize 启动说话人分离
 func (a *App) handleDiarize(w http.ResponseWriter, r *http.Request) {
-	rec, ok := a.get(r.PathValue("id"))
+	rec, ok := a.getOrLoad(r.PathValue("id"))
 	if !ok {
 		writeErr(w, 404, "记录不存在")
 		return
@@ -489,7 +543,7 @@ func (a *App) handleDiarize(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleMedia(w http.ResponseWriter, r *http.Request) {
-	rec, ok := a.get(r.PathValue("id"))
+	rec, ok := a.getOrLoad(r.PathValue("id"))
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -523,7 +577,7 @@ func (a *App) handleMedia(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleTranscript(w http.ResponseWriter, r *http.Request) {
-	rec, ok := a.get(r.PathValue("id"))
+	rec, ok := a.getOrLoad(r.PathValue("id"))
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -551,7 +605,7 @@ func (a *App) handleTranscript(w http.ResponseWriter, r *http.Request) {
 
 // handleTTS 用本地 GPT-SoVITS 合成配音
 func (a *App) handleTTS(w http.ResponseWriter, r *http.Request) {
-	rec, ok := a.get(r.PathValue("id"))
+	rec, ok := a.getOrLoad(r.PathValue("id"))
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -575,7 +629,7 @@ func (a *App) handleTTS(w http.ResponseWriter, r *http.Request) {
 
 // handleTTSAudio 播放已生成的配音
 func (a *App) handleTTSAudio(w http.ResponseWriter, r *http.Request) {
-	rec, ok := a.get(r.PathValue("id"))
+	rec, ok := a.getOrLoad(r.PathValue("id"))
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -598,7 +652,7 @@ func (a *App) handleTTSAudio(w http.ResponseWriter, r *http.Request) {
 
 // handleSummary 用大模型生成会议纪要（OpenAI 兼容接口）
 func (a *App) handleSummary(w http.ResponseWriter, r *http.Request) {
-	rec, ok := a.get(r.PathValue("id"))
+	rec, ok := a.getOrLoad(r.PathValue("id"))
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -616,7 +670,7 @@ func (a *App) handleSummary(w http.ResponseWriter, r *http.Request) {
 
 // handleActions 抽取结构化待办（规则版，不调用大模型）
 func (a *App) handleActions(w http.ResponseWriter, r *http.Request) {
-	rec, ok := a.get(r.PathValue("id"))
+	rec, ok := a.getOrLoad(r.PathValue("id"))
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -657,6 +711,77 @@ func (a *App) handleCalendar(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleLLMLocalTest 试着连上（必要时拉起）本机模型并让它说一句话，
+// 让用户知道本地纪要到底能不能用、大概多慢
+func (a *App) handleLLMLocalTest(w http.ResponseWriter, r *http.Request) {
+	_, _, _, _, localURL, localModel, localBin, localGGUF, gpuLayers := a.set.LLMEngineConfig()
+	start := time.Now()
+	if err := a.ensureLocalLLM(localBin, localGGUF, localURL, gpuLayers); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
+	defer cancel()
+	reply, err := chatCompletionEx(ctx, localURL, "", localModel, []chatMessage{
+		{Role: "system", Content: "你是本地助手，回答尽量短。"},
+		{Role: "user", Content: "只回复两个字：可用"},
+	}, 120*time.Second, localChatExtra)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	model := ""
+	if names, err := a.localModelNames(localURL); err == nil && len(names) > 0 {
+		model = names[0]
+	}
+	writeJSON(w, 200, map[string]any{
+		"ok":    true,
+		"ms":    time.Since(start).Milliseconds(),
+		"reply": firstN([]byte(reply), 120),
+		"model": model,
+		"url":   localURL,
+	})
+}
+
+// localModelNames 读 /v1/models 拿模型名
+func (a *App) localModelNames(base string) ([]string, error) {
+	resp, err := (&http.Client{Timeout: 2 * time.Second}).Get(strings.TrimRight(base, "/") + "/models")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&out) != nil {
+		return nil, fmt.Errorf("解析失败")
+	}
+	names := make([]string, 0, len(out.Data))
+	for _, d := range out.Data {
+		names = append(names, d.ID)
+	}
+	return names, nil
+}
+
+// handleSearch 跨记录搜转写文本，走 data/search-index.json 的增量索引
+func (a *App) handleSearch(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query().Get("q")
+	if strings.TrimSpace(q) == "" {
+		writeErr(w, 400, "缺少参数 q")
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	hits, indexed := a.searchTranscripts(q, limit)
+	writeJSON(w, 200, map[string]any{
+		"query":   q,
+		"count":   len(hits),
+		"indexed": indexed,
+		"hits":    hits,
+	})
+}
+
 // handleCalendarRefresh 立刻重拉一次日历
 func (a *App) handleCalendarRefresh(w http.ResponseWriter, r *http.Request) {
 	if err := a.calendar.Refresh(); err != nil {
@@ -685,7 +810,7 @@ func (a *App) handleClip(w http.ResponseWriter, r *http.Request) {
 
 // handleTranslate 给整条记录补译文（本地 MarianMT，离线）
 func (a *App) handleTranslate(w http.ResponseWriter, r *http.Request) {
-	rec, ok := a.get(r.PathValue("id"))
+	rec, ok := a.getOrLoad(r.PathValue("id"))
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -709,7 +834,7 @@ func (a *App) handleTranslate(w http.ResponseWriter, r *http.Request) {
 // handleExport 导出会议纪要：Markdown 或 Word
 // 查询参数：format=md|docx（默认 md）、math=1（做公式整理）
 func (a *App) handleExport(w http.ResponseWriter, r *http.Request) {
-	rec, ok := a.get(r.PathValue("id"))
+	rec, ok := a.getOrLoad(r.PathValue("id"))
 	if !ok {
 		http.NotFound(w, r)
 		return

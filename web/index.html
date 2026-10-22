@@ -123,9 +123,28 @@
       </label>
       <details class="cfg">
         <summary>AI 纪要设置</summary>
+        <div class="row">
+          <span class="muted small">引擎</span>
+          <select id="llmEngine" class="mini">
+            <option value="auto">自动（本地模型优先，其次云端，都没有走规则）</option>
+            <option value="local">只用本机模型（完全离线）</option>
+            <option value="cloud">只用云端 API</option>
+            <option value="off">不用模型（纯规则抽取）</option>
+          </select>
+        </div>
+        <div class="muted small">云端（要联网，效果最好）</div>
         <input id="llmBase" type="text" placeholder="接口地址 https://api.deepseek.com/v1">
         <input id="llmModel" type="text" placeholder="模型 deepseek-chat">
         <input id="llmKey" type="password" placeholder="API Key（只存本机 settings.json）">
+        <div class="muted small">本机模型（不联网，数据不出机器）</div>
+        <input id="llmLocalUrl" type="text" placeholder="本地地址 http://127.0.0.1:8080/v1">
+        <input id="llmLocalBin" type="text" placeholder="llama-server.exe 路径（选填，填了会自动拉起）">
+        <input id="llmLocalGguf" type="text" placeholder="模型 .gguf 路径（选填，如 Qwen3-4B-Q4_K_M.gguf）">
+        <div class="row">
+          <span class="muted small">GPU 层</span>
+          <input id="llmLocalGpu" class="mini" type="number" value="-1">
+          <button id="llmLocalTest" class="btn small">测本机模型</button>
+        </div>
         <div class="row">
           <button id="llmSave" class="btn small primary">保存</button>
           <button id="llmClear" class="btn small">清除 Key</button>
