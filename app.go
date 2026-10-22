@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -111,6 +112,9 @@ var errConsentNeeded = fmt.Errorf("请先在悬浮条上确认录音授权")
 
 // stopRecording 停止录制（悬浮条 / 热键 / 网页共用）
 func (a *App) stopRecording() error {
+	// ffmpeg 收到 q 还要写完文件（几秒），先让悬浮条显示「正在保存」，
+	// 否则用户以为没点中，转头去工坊再点一次
+	a.overlay.SetSaving()
 	err := a.recorder.Stop()
 	a.overlay.SetIdle()
 	return err
@@ -341,6 +345,21 @@ func (a *App) autoTranscribe(rec *Recording) {
 	if a.python == "" || a.ffmpeg == "" {
 		return
 	}
+	// 录制本身失败时文件根本没生成，再硬转写只会把真正的错误
+	// （比如「屏幕采集拿到黑屏」）覆盖成「转写失败: 提取音频失败」
+	a.mu.Lock()
+	hasFile := rec.File != "" && fileExists(rec.File)
+	nParts := len(rec.Parts)
+	a.mu.Unlock()
+	if !hasFile && nParts == 0 {
+		a.mu.Lock()
+		if rec.Error == "" {
+			rec.Error = "录制文件不存在，录制可能没有成功"
+		}
+		a.mu.Unlock()
+		a.recorder.save(rec)
+		return
+	}
 	a.mu.Lock()
 	rec.Transcribing = true
 	a.mu.Unlock()
@@ -382,4 +401,36 @@ func (a *App) autoTranscribe(rec *Recording) {
 		a.mu.Unlock()
 		a.recorder.save(rec)
 	}
+
+	// 录完就该有纪要，不该让用户再点一次。用后台跑，别挡住转写收尾。
+	if err == nil && len(segs) > 0 {
+		a.autoSummarize(rec)
+	}
+}
+
+// autoSummarize 转写完成后自动生成纪要（设置里可关）
+func (a *App) autoSummarize(rec *Recording) {
+	if !a.set.AutoSummary() {
+		return
+	}
+	if rec.Summary != "" {
+		return // 已经生成过，别覆盖用户可能编辑过的内容
+	}
+	a.mu.Lock()
+	rec.Summarizing = true
+	a.mu.Unlock()
+	a.recorder.save(rec)
+
+	content, err := a.summarizeRecord(rec)
+
+	a.mu.Lock()
+	rec.Summarizing = false
+	a.mu.Unlock()
+	if err != nil {
+		// 自动失败不算错，用户仍可手动点「AI 纪要」
+		log.Printf("[summary] 自动纪要失败（可手动重试）: %v", err)
+		a.recorder.save(rec)
+		return
+	}
+	log.Printf("[summary] 已自动生成纪要（%d 字）: %s", len([]rune(content)), rec.ID)
 }

@@ -61,6 +61,10 @@ var (
 	gDeleteObject    = g32.NewProc("DeleteObject")
 	gCreateSolidBrsh = g32.NewProc("CreateSolidBrush")
 	gCreatePen       = g32.NewProc("CreatePen")
+	gCreateCompatDC  = g32.NewProc("CreateCompatibleDC")
+	gCreateCompatBmp = g32.NewProc("CreateCompatibleBitmap")
+	gBitBlt          = g32.NewProc("BitBlt")
+	gDeleteDC        = g32.NewProc("DeleteDC")
 	gRoundRect       = g32.NewProc("RoundRect")
 	gMoveToEx        = g32.NewProc("MoveToEx")
 	gLineTo          = g32.NewProc("LineTo")
@@ -122,6 +126,7 @@ const (
 	wmDestroy     = 0x0002
 	wmPaint       = 0x000F
 	wmTimer       = 0x0113
+	wmEraseBkgnd  = 0x0014
 	wmSetCursor   = 0x0020
 	wmNCHitTest   = 0x0084
 	wmNCLButtonDblClk = 0x00A3
@@ -187,6 +192,7 @@ const (
 	stRecording
 	stPrompt
 	stConsent
+	stSaving // 点了结束、ffmpeg 正在收尾（大文件要几秒），期间不能重复点
 )
 
 // barPattern 豆包 asr-animate 的柱高比例（中间高两边低）
@@ -287,6 +293,7 @@ func (o *Overlay) setState(st ovState, prompt string) {
 
 func (o *Overlay) SetIdle()              { o.setState(stIdle, "") }
 func (o *Overlay) SetRecording()         { o.setState(stRecording, "") }
+func (o *Overlay) SetSaving()            { o.setState(stSaving, "") }
 func (o *Overlay) SetPrompt(text string) { o.setState(stPrompt, text) }
 
 // ShowConsent 显示录音授权确认（自绘，避免依赖被策略屏蔽的 MessageBox）
@@ -594,6 +601,8 @@ func (o *Overlay) layout() []ovButton {
 		specs = []spec{{"ignore", "忽略", kindGhost, 56}, {"start", "开始", kindPrimary, 62}}
 	case stConsent:
 		specs = []spec{{"deny", "取消", kindGhost, 56}, {"consent", "同意并开始", kindPrimary, 118}}
+	case stSaving:
+		// 收尾中不给按钮：重复点「结束」只会拿到「当前没有在录制」的报错
 	default:
 		specs = []spec{{"start", "开始", kindPrimary, 62}}
 	}
@@ -621,9 +630,13 @@ func (o *Overlay) wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uint
 		o.paint(hwnd)
 		return 0
 	case wmTimer:
-		o.animate()
-		pInvalidateRect.Call(hwnd, 0, 0)
+		if o.animate() {
+			pInvalidateRect.Call(hwnd, 0, 0)
+		}
 		return 0
+	case wmEraseBkgnd:
+		// 背景由 paint 自己填，交回系统擦会把整块刷成白底再画，20FPS 下就是闪烁
+		return 1
 	case wmNCHitTest:
 		// WM_NCHITTEST 的坐标是屏幕坐标，必须先转成客户区
 		pt := winPoint{X: int32(int16(lParam & 0xFFFF)), Y: int32(int16((lParam >> 16) & 0xFFFF))}
@@ -752,23 +765,43 @@ func (o *Overlay) inGrip(x, y int32) bool {
 }
 
 // animate 平滑电平，让声波跳动自然
-func (o *Overlay) animate() {
+// animate 推动电平条缓动，返回是否真的有变化。
+// 返回值很重要：没有变化就不该重绘，否则 20FPS 全窗重画会肉眼可见地闪。
+func (o *Overlay) animate() bool {
 	o.mu.Lock()
+	old := o.level
 	o.level += (o.target - o.level) * 0.35
 	if o.level < 0.5 {
 		o.level = 0
 	}
+	changed := math.Abs(o.level-old) > 0.4
 	o.mu.Unlock()
+	return changed
 }
 
 func (o *Overlay) paint(hwnd uintptr) {
 	var ps paintStruct
-	hdc, _, _ := pBeginPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
+	winDC, _, _ := pBeginPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
 	defer pEndPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
 
 	var rc winRect
 	pGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&rc)))
 	W, H := rc.Right, rc.Bottom
+
+	// 双缓冲：整帧先画到内存 DC，最后一次性 BitBlt 贴上去。
+	// 直接往窗口 DC 上画的话，每帧「填背景 → 画内容」的中间状态会被看见，
+	// 20FPS 的电平条动画就表现为整条悬浮框在闪。
+	const srcCopy = 0x00CC0020
+	memDC, _, _ := gCreateCompatDC.Call(winDC)
+	bmp, _, _ := gCreateCompatBmp.Call(winDC, uintptr(W), uintptr(H))
+	oldBmp, _, _ := gSelectObject.Call(memDC, bmp)
+	hdc := memDC
+	defer func() {
+		gBitBlt.Call(winDC, 0, 0, uintptr(W), uintptr(H), memDC, 0, 0, srcCopy)
+		gSelectObject.Call(memDC, oldBmp)
+		gDeleteObject.Call(bmp)
+		gDeleteDC.Call(memDC)
+	}()
 
 	bg, _, _ := gCreateSolidBrsh.Call(colBg)
 	pFillRect.Call(hdc, uintptr(unsafe.Pointer(&rc)), bg)
@@ -876,6 +909,8 @@ func (o *Overlay) paint(hwnd uintptr) {
 	if show == "" {
 		if st == stRecording {
 			show = "正在听…"
+		} else if st == stSaving {
+			show = "正在保存录制…"
 		} else {
 			show = "点「开始」或按 Ctrl+Alt+Space 说话"
 		}

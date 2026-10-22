@@ -135,6 +135,9 @@ func (a *App) settingsView() map[string]any {
 	return map[string]any{
 		"consentAccepted": a.set.ConsentOK(),
 		"meetingPrompt":   a.set.MeetingEnabled(),
+		"autoSummary":     a.set.AutoSummary(),
+		"liveMode":        a.set.LiveModeAccurate(),
+		"diarThreshold":   a.set.DiarThresholdVal(),
 		"mutedApps":       a.set.Muted(),
 		"overlayHidden":   a.set.Hidden(),
 		"autoStart":       autoStartEnabled(),
@@ -202,6 +205,9 @@ func looksBluetooth(name string) bool {
 func (a *App) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		MeetingPrompt  *bool   `json:"meetingPrompt"`
+		AutoSummary    *bool   `json:"autoSummary"`
+		LiveAccurate   *bool   `json:"liveAccurate"`
+		DiarThreshold  *float64 `json:"diarThreshold"`
 		OverlayHidden  *bool   `json:"overlayHidden"`
 		ResetConsent   *bool   `json:"resetConsent"`
 		AcceptConsent  *bool   `json:"acceptConsent"`
@@ -277,6 +283,19 @@ func (a *App) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.MeetingPrompt != nil {
 		a.set.SetMeetingEnabled(*req.MeetingPrompt)
+	}
+	if req.AutoSummary != nil {
+		a.set.SetAutoSummary(*req.AutoSummary)
+	}
+	if req.DiarThreshold != nil {
+		a.set.SetDiarThreshold(*req.DiarThreshold)
+	}
+	if req.LiveAccurate != nil {
+		mode := "fast"
+		if *req.LiveAccurate {
+			mode = "accurate"
+		}
+		a.set.SetLiveMode(mode)
 	}
 	if req.OverlayHidden != nil {
 		a.set.SetHidden(*req.OverlayHidden)

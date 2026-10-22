@@ -34,7 +34,9 @@ def read_wav(path):
 def main():
     if len(sys.argv) < 2:
         raise SystemExit("usage: diarize.py <wav> [threshold]")
-    thr = float(sys.argv[2]) if len(sys.argv) > 2 else 0.5
+    # 0.5 是两人对话的常用值，但多人会议下偏小——不同的人容易被并成同一个（欠分割）。
+    # 0.65 是 sherpa-onnx 多人示例的常见取值，宁可多分一个人也别把两个人混成一个。
+    thr = float(sys.argv[2]) if len(sys.argv) > 2 else 0.65
     samples, dur = read_wav(sys.argv[1])
 
     cfg = sherpa_onnx.OfflineSpeakerDiarizationConfig(
@@ -44,7 +46,8 @@ def main():
         embedding=sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=EMB),
         clustering=sherpa_onnx.FastClusteringConfig(num_clusters=-1, threshold=thr),
         min_duration_on=0.25,
-        min_duration_off=0.4,
+        # 同一人换气停顿常达半秒，0.4 会把一个人的话切成好几段，再被聚类分到不同人
+        min_duration_off=0.6,
     )
     sd = sherpa_onnx.OfflineSpeakerDiarization(cfg)
     result = sd.process(samples).sort_by_start_time()

@@ -34,49 +34,51 @@ type Segment struct {
 
 // Recording 一次录制
 type Recording struct {
-	ID          string     `json:"id"`
-	Title       string     `json:"title"`
-	Mode        string     `json:"mode"` // screen / audio
-	File        string     `json:"file"`
-	Parts       []string   `json:"parts,omitempty"`
-	PCMFile     string     `json:"pcmFile,omitempty"`
-	StartedAt   time.Time  `json:"startedAt"`
-	EndedAt     *time.Time `json:"endedAt,omitempty"`
-	DurationMs  int64      `json:"durationMs"`
-	Status      string     `json:"status"` // recording / done / error
-	Error       string     `json:"error,omitempty"`
-	Screen      int        `json:"screen"`
-	Mic         string     `json:"mic"`
-	FPS         int        `json:"fps"`
-	CRF         int        `json:"crf"`
-	GainDb      int        `json:"gainDb"`
-	SystemAudio bool       `json:"systemAudio"`
-	SysDevice   string     `json:"sysDevice,omitempty"`
-	SysWarning  string     `json:"sysWarning,omitempty"`
-	SysFile     string     `json:"-"`
-	SysLeadMs   int64      `json:"-"`
-	Segments    []Segment  `json:"segments"`
-	LiveText    string     `json:"liveText"`
-	LivePartial string     `json:"livePartial"`
-	LiveTrans   string     `json:"liveTrans,omitempty"`
-	LiveDir     string     `json:"-"`
-	LiveLevel   int        `json:"liveLevel"`
-	LiveSysLevel int       `json:"liveSysLevel,omitempty"` // 电脑声音的电平（实时字幕用）
-	Encoder     string     `json:"encoder,omitempty"`
-	Transcribed bool       `json:"transcribed"`
-	Transcribing bool      `json:"transcribing"`
-	Diarized    bool       `json:"diarized"`
-	Diarizing   bool       `json:"diarizing"`
-	Speakers    int        `json:"speakers"`
-	TranslateDir string    `json:"translateDir,omitempty"` // en2zh / zh2en
-	Summary      string    `json:"summary,omitempty"`      // AI 纪要（Markdown）
-	SummaryModel string    `json:"summaryModel,omitempty"`
+	ID           string     `json:"id"`
+	Title        string     `json:"title"`
+	Mode         string     `json:"mode"` // screen / audio
+	File         string     `json:"file"`
+	Parts        []string   `json:"parts,omitempty"`
+	PCMFile      string     `json:"pcmFile,omitempty"`
+	StartedAt    time.Time  `json:"startedAt"`
+	EndedAt      *time.Time `json:"endedAt,omitempty"`
+	DurationMs   int64      `json:"durationMs"`
+	Status       string     `json:"status"` // recording / done / error
+	Error        string     `json:"error,omitempty"`
+	Screen       int        `json:"screen"`
+	Mic          string     `json:"mic"`
+	FPS          int        `json:"fps"`
+	CRF          int        `json:"crf"`
+	GainDb       int        `json:"gainDb"`
+	SystemAudio  bool       `json:"systemAudio"`
+	SysDevice    string     `json:"sysDevice,omitempty"`
+	SysWarning   string     `json:"sysWarning,omitempty"`
+	SysFile      string     `json:"-"`
+	SysLeadMs    int64      `json:"-"`
+	Segments     []Segment  `json:"segments"`
+	LiveText     string     `json:"liveText"`
+	LivePartial  string     `json:"livePartial"`
+	LiveTrans    string     `json:"liveTrans,omitempty"`
+	LiveDir      string     `json:"-"`
+	LiveLevel    int        `json:"liveLevel"`
+	LiveSysLevel int        `json:"liveSysLevel,omitempty"` // 电脑声音的电平（实时字幕用）
+	Encoder      string     `json:"encoder,omitempty"`
+	CaptureNote  string     `json:"captureNote,omitempty"`
+	Transcribed  bool       `json:"transcribed"`
+	Summarizing  bool       `json:"summarizing,omitempty"`
+	Transcribing bool       `json:"transcribing"`
+	Diarized     bool       `json:"diarized"`
+	Diarizing    bool       `json:"diarizing"`
+	Speakers     int        `json:"speakers"`
+	TranslateDir string     `json:"translateDir,omitempty"` // en2zh / zh2en
+	Summary      string     `json:"summary,omitempty"`      // AI 纪要（Markdown）
+	SummaryModel string     `json:"summaryModel,omitempty"`
 	SummaryAt    *time.Time `json:"summaryAt,omitempty"`
-	SizeBytes    int64     `json:"sizeBytes"`
-	Pattern     string     `json:"-"` // 分段录制时的文件名模板
-	ClipOf       string    `json:"clipOf,omitempty"`       // 从哪条记录剪出来的
-	ClipStartSec float64   `json:"clipStartSec,omitempty"` // 原片里的起点（秒）
-	ClipBurned   bool      `json:"clipBurned,omitempty"`   // 是否烧录了字幕
+	SizeBytes    int64      `json:"sizeBytes"`
+	Pattern      string     `json:"-"`                      // 分段录制时的文件名模板
+	ClipOf       string     `json:"clipOf,omitempty"`       // 从哪条记录剪出来的
+	ClipStartSec float64    `json:"clipStartSec,omitempty"` // 原片里的起点（秒）
+	ClipBurned   bool       `json:"clipBurned,omitempty"`   // 是否烧录了字幕
 }
 
 // Recorder 管理 ffmpeg 录制进程
@@ -112,6 +114,9 @@ type StartOptions struct {
 	SysDevice   string `json:"sysDevice"`
 	// 自定义标题（日历自动录制时用日程名），空则按时间生成
 	Title string `json:"title,omitempty"`
+
+	// capture 采集方案（由 planCapture 预检决定，非前端传入）
+	capture *capturePlan
 }
 
 func (r *Recorder) Current() *Recording {
@@ -122,6 +127,16 @@ func (r *Recorder) Current() *Recording {
 
 // Start 启动录制
 func (r *Recorder) Start(opt StartOptions) (*Recording, error) {
+	// 采集预检放在加锁之前：要真抓几帧判断是不是黑屏，耗时 1~2 秒。
+	// 持锁做会卡住 /api/state 这类高频轮询，界面看起来像卡死。
+	if opt.Mode == "" || opt.Mode == "screen" || opt.Mode == "window" {
+		cp, err := r.app.planCapture(opt)
+		if err != nil {
+			return nil, err
+		}
+		opt.capture = &cp
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.cur != nil && r.cur.Status == "recording" {
@@ -258,25 +273,26 @@ func (r *Recorder) Start(opt StartOptions) (*Recording, error) {
 		title = defaultTitle(opt.Mode, now)
 	}
 	rec := &Recording{
-		ID:        id,
-		Title:     title,
-		Mode:      opt.Mode,
-		File:      outFile,
-		PCMFile:   pcmFile,
-		StartedAt: now,
-		Status:    "recording",
-		Screen:    opt.Screen,
-		Mic:       opt.Mic,
-		FPS:       opt.FPS,
-		CRF:       opt.CRF,
-		GainDb:    opt.GainDb,
-		Encoder:   startedEnc,
+		ID:          id,
+		Title:       title,
+		Mode:        opt.Mode,
+		File:        outFile,
+		PCMFile:     pcmFile,
+		StartedAt:   now,
+		Status:      "recording",
+		Screen:      opt.Screen,
+		Mic:         opt.Mic,
+		FPS:         opt.FPS,
+		CRF:         opt.CRF,
+		GainDb:      opt.GainDb,
+		Encoder:     startedEnc,
+		CaptureNote: captureNoteOf(opt),
 		SystemAudio: opt.SystemAudio,
-		SysDevice: opt.SysDevice,
-		SysFile:    sysFile,
-		SysLeadMs:  leadMs,
-		Segments:  []Segment{},
-		Pattern:   pattern,
+		SysDevice:   opt.SysDevice,
+		SysFile:     sysFile,
+		SysLeadMs:   leadMs,
+		Segments:    []Segment{},
+		Pattern:     pattern,
 	}
 	r.cur, r.cmd, r.stdin = rec, cmd, stdin
 	r.loop = lb
@@ -297,6 +313,14 @@ func (r *Recorder) Start(opt StartOptions) (*Recording, error) {
 	return rec, nil
 }
 
+// captureNoteOf 取出采集降级说明（窗口硬件加速改裁剪之类），空串表示一切正常
+func captureNoteOf(opt StartOptions) string {
+	if opt.capture == nil {
+		return ""
+	}
+	return opt.capture.note
+}
+
 func defaultTitle(mode string, t time.Time) string {
 	kind := "录屏"
 	if mode == "audio" {
@@ -314,17 +338,28 @@ func buildRecordArgs(opt StartOptions, outFile, pcmFile, enc string) []string {
 	}
 
 	args := []string{"-y", "-hide_banner", "-loglevel", "warning"}
-	if opt.Mode == "screen" {
-		args = append(args,
-			"-thread_queue_size", "512",
-			"-f", "lavfi", "-i", fmt.Sprintf("ddagrab=%d:framerate=%d", opt.Screen, opt.FPS),
-		)
-	} else if opt.Mode == "window" {
-		args = append(args,
-			"-thread_queue_size", "512",
-			"-f", "gdigrab", "-framerate", fmt.Sprint(opt.FPS),
-			"-i", fmt.Sprintf("hwnd=0x%x", opt.Hwnd),
-		)
+	if opt.Mode == "screen" || opt.Mode == "window" {
+		cp := opt.capture
+		if cp == nil { // 兜底：没走预检的老调用方
+			cp = &capturePlan{kind: "ddagrab", screen: opt.Screen}
+		}
+		args = append(args, "-thread_queue_size", "512")
+		switch cp.kind {
+		case "gdigrab-desktop":
+			args = append(args,
+				"-f", "gdigrab", "-framerate", fmt.Sprint(opt.FPS),
+				"-i", "desktop",
+			)
+		case "gdigrab-window":
+			args = append(args,
+				"-f", "gdigrab", "-framerate", fmt.Sprint(opt.FPS),
+				"-i", fmt.Sprintf("hwnd=0x%x", opt.Hwnd),
+			)
+		default: // ddagrab / ddagrab-crop
+			args = append(args,
+				"-f", "lavfi", "-i", fmt.Sprintf("ddagrab=%d:framerate=%d", cp.screen, opt.FPS),
+			)
+		}
 	}
 	args = append(args,
 		"-thread_queue_size", "512",
@@ -333,8 +368,10 @@ func buildRecordArgs(opt StartOptions, outFile, pcmFile, enc string) []string {
 
 	if opt.Mode != "audio" {
 		args = append(args, "-map", "0:v")
-		if opt.Mode == "screen" {
-			args = append(args, "-vf", "hwdownload,format=bgra,scale=trunc(iw/2)*2:trunc(ih/2)*2")
+		cp := opt.capture
+		useHW := cp != nil && (cp.kind == "ddagrab" || cp.kind == "ddagrab-crop")
+		if useHW {
+			args = append(args, "-vf", cp.cropFilter())
 		} else {
 			args = append(args, "-vf", "format=yuv420p,scale=trunc(iw/2)*2:trunc(ih/2)*2")
 		}
@@ -358,14 +395,13 @@ func buildRecordArgs(opt StartOptions, outFile, pcmFile, enc string) []string {
 				outFile,
 			)
 		} else {
-			args = append(args, "-movflags", "+faststart", outFile)
+			args = append(args, outFile)
 		}
 	} else {
 		args = append(args, "-map", "0:a")
 		args = append(args, gain...)
 		args = append(args,
 			"-c:a", "aac", "-b:a", "160k", "-ar", "44100", "-ac", "2",
-			"-movflags", "+faststart",
 			outFile,
 		)
 	}
@@ -380,8 +416,6 @@ func buildRecordArgs(opt StartOptions, outFile, pcmFile, enc string) []string {
 		"-flush_packets", "1", pcmFile)
 	return args
 }
-
-
 
 // Stop 停止录制（发送 q 让 ffmpeg 正常收尾）
 func (r *Recorder) Stop() error {
@@ -510,8 +544,7 @@ func globParts(pattern string) []string {
 func (r *Recorder) liveLoop(rec *Recording, pcmPath string, stop chan struct{}) {
 	const sr = 16000
 	const bytesPerSec = sr * 2
-	chunkBytes := int64(bytesPerSec * 2.5)
-	overlapBytes := int64(bytesPerSec * 0.3)
+	overlapBytes := int64(bytesPerSec * 0.3) // 切句时向前多带 0.3 秒，避免切在字中间
 	liveOn, liveDirCfg := false, "auto"
 	if r.app.set != nil {
 		liveOn, liveDirCfg = r.app.set.LiveTransConfig()
@@ -536,7 +569,12 @@ func (r *Recorder) liveLoop(rec *Recording, pcmPath string, stop chan struct{}) 
 	defer f.Close()
 
 	consumed := int64(0)
+	// 流式 Paraformer 在真实会议里同音字错得多（编码器是 int8、上下文只有几百毫秒），
+	// 默认改成用 SenseVoice 每 0.7 秒解 2.5 秒窗口——延迟高半秒，准确率高一档。
 	useStream := r.app.streamReady() && r.app.stream != nil
+	if r.app.set != nil && r.app.set.LiveModeAccurate() {
+		useStream = false
+	}
 	uttStart := int64(0)
 	lastPartial := ""
 	tick := 700 * time.Millisecond
@@ -630,20 +668,35 @@ func (r *Recorder) liveLoop(rec *Recording, pcmPath string, stop chan struct{}) 
 			continue
 		}
 
-		// ---- 回退路径：2.5 秒分块 + 0.3 秒重叠 ----
-		if size-consumed < chunkBytes {
-			continue
+		// ---- SenseVoice 分块：按能量端点切句，而不是固定 2.5 秒硬切 ----
+		// 固定长度切会把一句话拦腰截断（"我们下周把接口文档" + "更新一下"），
+		// 后半句没有上下文，同音字错得离谱。改成：等到出现 0.4 秒静音再切，
+		// 最长攒 5 秒（与端点切句的上限一致）。
+		avail := size - consumed
+		if avail < int64(bytesPerSec)*3/2 {
+			continue // 不到 1.5 秒不切，太短的句子模型没有上下文
 		}
+		tail := int64(bytesPerSec) * 4 / 10
+		quiet := false
+		if avail > tail {
+			if b := readAt(size-tail, tail); b != nil {
+				quiet = pcmRMS(b) < 260
+			}
+		}
+		if !quiet && avail < int64(bytesPerSec)*5 {
+			continue // 还在说话，继续攒
+		}
+		end := consumed + avail
 		start := consumed - overlapBytes
 		if start < 0 {
 			start = 0
 		}
-		n := consumed + chunkBytes - start
+		n := end - start
 		buf := readAt(start, n)
 		if buf == nil {
 			continue
 		}
-		consumed += chunkBytes
+		consumed = end
 		if pcmRMS(buf) < 260 {
 			continue
 		}
@@ -668,7 +721,7 @@ func (r *Recorder) liveLoop(rec *Recording, pcmPath string, stop chan struct{}) 
 func (r *Recorder) sysLiveLoop(rec *Recording, sysPath string, leadMs int64, stop chan struct{}) {
 	const srcBytesPerSec = loopRate * loopCh * 2 // 回环原始格式：48k / 立体声 / 16bit
 	const quantum = srcBytesPerSec / 5           // 0.2 秒一个能量判断窗口
-	const sysSpeechRMS = 300.0                  // 有没有人声的粗略门限
+	const sysSpeechRMS = 300.0                   // 有没有人声的粗略门限
 	offsetSec := -float64(leadMs) / 1000
 
 	liveOn, liveDirCfg := false, "auto"

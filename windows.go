@@ -41,6 +41,36 @@ type winRect struct {
 	Left, Top, Right, Bottom int32
 }
 
+// windowScreenRect 取窗口在屏幕上的矩形（含标题栏边框）。
+// 用于「窗口录不了时改用全屏采集 + 裁剪」的降级路径。
+func windowScreenRect(hwnd uint64) (winRect, bool) {
+	var rc winRect
+	if hwnd == 0 {
+		return rc, false
+	}
+	if r, _, _ := procGetWindowRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&rc))); r == 0 {
+		return rc, false
+	}
+	if rc.Right <= rc.Left || rc.Bottom <= rc.Top {
+		return rc, false
+	}
+	return rc, true
+}
+
+// windowUsable 窗口是否还活着、没最小化
+func windowUsable(hwnd uint64) bool {
+	if hwnd == 0 {
+		return false
+	}
+	if v, _, _ := procIsWindowVisible.Call(uintptr(hwnd)); v == 0 {
+		return false
+	}
+	if v, _, _ := procIsIconic.Call(uintptr(hwnd)); v != 0 {
+		return false
+	}
+	return true
+}
+
 const (
 	gwlExStyle     = 0xFFFFFFEC // -20
 	wsExToolWindow = 0x00000080

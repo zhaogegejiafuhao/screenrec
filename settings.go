@@ -18,6 +18,13 @@ type Settings struct {
 	ConsentAccepted bool `json:"consentAccepted"`
 	// 会议自动提醒（默认开启，故用 Off 取反存储）
 	MeetingPromptOff bool `json:"meetingPromptOff"`
+	// 说话人聚类阈值（0.3~0.9）：越大越容易把人分成不同的人，越小越容易合并
+	DiarThreshold float64 `json:"diarThreshold"`
+	// 实时字幕走哪条路："" / "accurate" 用 SenseVoice 整段解码（慢 0.5 秒但准得多），
+	// "fast" 用流式 Paraformer（200ms 出字，但同音字错得多）
+	LiveMode string `json:"liveMode"`
+	// 转写完成后自动生成纪要（默认开启，故用 Off 取反存储）
+	AutoSummaryOff bool `json:"autoSummaryOff"`
 	// 用户选择"不再提醒"的应用名
 	MutedApps []string `json:"mutedApps"`
 	// 用户手动关掉悬浮条后记住状态
@@ -180,6 +187,43 @@ func (s *Settings) SetCalendar(enabled bool, source string, leadMin int, autoSta
 	s.save()
 }
 
+// DiarThresholdVal 说话人聚类阈值（默认 0.65）
+func (s *Settings) DiarThresholdVal() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.DiarThreshold <= 0 || s.DiarThreshold > 0.95 {
+		return 0.65
+	}
+	return s.DiarThreshold
+}
+
+func (s *Settings) SetDiarThreshold(v float64) {
+	if v < 0.3 {
+		v = 0.3
+	}
+	if v > 0.9 {
+		v = 0.9
+	}
+	s.mu.Lock()
+	s.DiarThreshold = v
+	s.mu.Unlock()
+	s.save()
+}
+
+// LiveModeAccurate 实时字幕是否用高精度模型（默认是）
+func (s *Settings) LiveModeAccurate() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.LiveMode != "fast"
+}
+
+func (s *Settings) SetLiveMode(mode string) {
+	s.mu.Lock()
+	s.LiveMode = mode
+	s.mu.Unlock()
+	s.save()
+}
+
 func (s *Settings) LiveTransConfig() (bool, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -243,6 +287,20 @@ func (s *Settings) ConsentOK() bool {
 func (s *Settings) AcceptConsent() {
 	s.mu.Lock()
 	s.ConsentAccepted = true
+	s.mu.Unlock()
+	s.save()
+}
+
+// AutoSummary 录完是否自动出纪要
+func (s *Settings) AutoSummary() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.AutoSummaryOff
+}
+
+func (s *Settings) SetAutoSummary(on bool) {
+	s.mu.Lock()
+	s.AutoSummaryOff = !on
 	s.mu.Unlock()
 	s.save()
 }

@@ -10,6 +10,7 @@ const state = {
   cur: null,
   timer: null,
   pollTimer: null,
+  stopping: false,
   overlay: false,
 };
 
@@ -98,6 +99,8 @@ async function loadState() {
   if (s.settings) {
     settingsCache = s.settings;
     $('meetingChk').checked = !!s.settings.meetingPrompt;
+    if ($('autoSumChk')) $('autoSumChk').checked = s.settings.autoSummary !== false;
+    if ($('liveAccChk')) $('liveAccChk').checked = s.settings.liveMode !== false;
     $('autoChk').checked = !!s.settings.autoStart;
     $('llmBase').value = s.settings.llmBaseUrl || '';
     $('llmModel').value = s.settings.llmModel || '';
@@ -186,8 +189,13 @@ function checkSysDevice() {
 
 /* ---------- 麦克风检测 ---------- */
 function setMeter(el, level) {
-  el.style.width = Math.max(0, Math.min(100, level)) + '%';
-  el.className = level > 85 ? 'hot' : level > 60 ? 'mid' : '';
+  const v = Math.max(0, Math.min(100, level));
+  // 只在有明显变化时才写样式，避免每秒几十次无谓的 layout
+  if (el.dataset.v && Math.abs(Number(el.dataset.v) - v) < 2) return;
+  el.dataset.v = String(v);
+  el.style.width = v + '%';
+  const cls = v > 85 ? 'hot' : v > 60 ? 'mid' : '';
+  if (el.className !== cls) el.className = cls;
 }
 
 async function micTest() {
@@ -248,15 +256,23 @@ async function startRecording() {
     systemAudio: !!$('sysSel').value,
     sysDevice: $('sysSel').value || '',
   };
+  // 设备打开 + 采集预检要几秒（蓝牙耳机切到通话模式尤其慢），先给个反馈
+  const btn = $('recBtn');
+  const oldLabel = btn.textContent;
+  btn.textContent = '启动中…';
+  btn.disabled = true;
   try {
     const rec = await api('/api/record/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
+    btn.disabled = false;
     startUI(rec);
     toast('开始录制');
   } catch (e) {
+    btn.disabled = false;
+    btn.textContent = oldLabel;
     toast(e.message, 'err');
   }
 }
@@ -279,10 +295,21 @@ function startUI(rec) {
 }
 
 async function stopRecording() {
+  if (state.stopping) return;
+  state.stopping = true;
+  // 先给反馈再等后端：ffmpeg 收尾要几秒，按钮不动的话用户会以为没点中，
+  // 转头再去悬浮条/工坊点一次，第二次只会拿到「当前没有在录制」
+  const btn = $('recBtn');
+  btn.textContent = '正在保存…';
+  btn.disabled = true;
+  $('liveState').textContent = '正在保存录制…';
   try {
     await api('/api/record/stop', { method: 'POST' });
   } catch (e) {
     toast(e.message, 'err');
+  } finally {
+    state.stopping = false;
+    btn.disabled = false;
   }
   clearInterval(state.timer);
   clearInterval(state.pollTimer);
@@ -306,25 +333,35 @@ async function pollLive() {
     const done = l.text || '';
     const partial = l.partial || '';
     const box = $('liveText');
-    box.innerHTML = escapeHtml(done) + (partial ? `<span class="partial">${escapeHtml(partial)}</span>` : '');
-    if (!done && !partial) box.textContent = '（等待语音…）';
-    box.scrollTop = box.scrollHeight;
+    // 内容没变就别动 DOM：每 1.2 秒重建 innerHTML 会让光标动画重置、文本重排，
+    // 叠加滚动条位置变化，看起来就是一整块在闪
+    const sig = done + '\u0000' + partial;
+    if (box.dataset.sig !== sig) {
+      box.dataset.sig = sig;
+      if (!done && !partial) {
+        box.textContent = '（等待语音…）';
+      } else {
+        box.innerHTML = escapeHtml(done) + (partial ? `<span class="partial">${escapeHtml(partial)}</span>` : '');
+      }
+      box.scrollTop = box.scrollHeight;
+    }
     const tBox = $('liveTrans');
     if (l.trans) {
+      if (tBox.dataset.sig !== l.trans) {
+        tBox.dataset.sig = l.trans;
+        tBox.textContent = l.trans;
+        tBox.scrollTop = tBox.scrollHeight;
+      }
       tBox.hidden = false;
-      tBox.textContent = l.trans;
-      tBox.scrollTop = tBox.scrollHeight;
     } else {
       tBox.hidden = true;
     }
     setMeter($('liveFill'), l.level || 0);
-    if ((l.level || 0) < 3) {
-      $('liveState').textContent = '⚠️ 没有检测到声音，检查麦克风';
-    } else if (l.segments.length || partial) {
-      $('liveState').textContent = `已转写 ${l.segments.length} 段${partial ? ' · 识别中' : ''}`;
-    } else {
-      $('liveState').textContent = '正在听…';
-    }
+    let hint;
+    if ((l.level || 0) < 3) hint = '⚠️ 没有检测到声音，检查麦克风';
+    else if (l.segments.length || partial) hint = `已转写 ${l.segments.length} 段${partial ? ' · 识别中' : ''}`;
+    else hint = '正在听…';
+    if ($('liveState').textContent !== hint) $('liveState').textContent = hint;
   } catch (e) { /* 忽略轮询错误 */ }
 }
 
@@ -893,6 +930,26 @@ document.addEventListener('DOMContentLoaded', async () => {
         body: JSON.stringify({ meetingPrompt: e.target.checked }),
       });
       toast(e.target.checked ? '开会时会自动提醒' : '已关闭会议提醒');
+    } catch (err) { toast(err.message, 'err'); }
+  };
+  if ($('liveAccChk')) $('liveAccChk').onchange = async (e) => {
+    try {
+      settingsCache = await api('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ liveAccurate: e.target.checked }),
+      });
+      toast(e.target.checked ? '字幕已切到高精度模式（下次录制生效）' : '字幕已切到低延迟模式（下次录制生效）');
+    } catch (err) { toast(err.message, 'err'); }
+  };
+  if ($('autoSumChk')) $('autoSumChk').onchange = async (e) => {
+    try {
+      settingsCache = await api('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ autoSummary: e.target.checked }),
+      });
+      toast(e.target.checked ? '录完会自动生成纪要' : '已关闭自动纪要');
     } catch (err) { toast(err.message, 'err'); }
   };
   $('autoChk').onchange = async (e) => {

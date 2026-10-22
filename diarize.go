@@ -49,7 +49,7 @@ func (a *App) Diarize(media string) ([]DiarSeg, error) {
 
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 60*time.Minute)
 	defer cancel2()
-	c2 := exec.CommandContext(ctx2, a.python, script, wav)
+	c2 := exec.CommandContext(ctx2, a.python, script, wav, fmt.Sprintf("%.2f", a.set.DiarThresholdVal()))
 	c2.Dir = a.assets
 	out, err := c2.Output()
 	if err != nil {
@@ -64,7 +64,10 @@ func (a *App) Diarize(media string) ([]DiarSeg, error) {
 	return res.Segments, nil
 }
 
-// assignSpeakers 按时间重叠把说话人编号写到转写分段上（speaker 从 1 开始）
+// assignSpeakers 按时间重叠把说话人编号写到转写分段上（speaker 从 1 开始）。
+//
+// 只认「重叠够多」的区间：原来只要重叠超过 0.05 秒就采纳，一个 5 秒的段落里
+// 别人的 0.1 秒插话就能把它判给错误的人。现在要求重叠至少 0.3 秒且不低于段长的 25%。
 func assignSpeakers(segs []Segment, ds []DiarSeg) int {
 	maxSpk := 0
 	for i := range segs {
@@ -75,7 +78,15 @@ func assignSpeakers(segs []Segment, ds []DiarSeg) int {
 				bestOv, best = ov, d.Speaker
 			}
 		}
-		if best >= 0 && bestOv > 0.05 {
+		dur := segs[i].End - segs[i].Start
+		need := dur * 0.25
+		if need > 0.3 {
+			need = 0.3
+		}
+		if need < 0.1 {
+			need = 0.1
+		}
+		if best >= 0 && bestOv >= need {
 			segs[i].Speaker = best + 1
 			if best+1 > maxSpk {
 				maxSpk = best + 1
