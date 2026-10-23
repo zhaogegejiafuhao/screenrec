@@ -1,5 +1,8 @@
 # screenrec
 
+**[Download v0.8.0](https://github.com/zhaogegejiafuhao/screenrec/releases/latest)**
+(`setup-0.8.0.exe` installer / `screenrec-0.8.0-win64.zip` portable)
+
 A local-first screen recorder and meeting transcriber for Windows — **no cloud, no account, no telemetry**.
 
 Records screen / a single window / microphone / system audio, transcribes with SenseVoice,
