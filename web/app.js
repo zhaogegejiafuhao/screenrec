@@ -100,6 +100,7 @@ async function loadState() {
     settingsCache = s.settings;
     $('meetingChk').checked = !!s.settings.meetingPrompt;
     if ($('autoSumChk')) $('autoSumChk').checked = s.settings.autoSummary !== false;
+    if ($('autoCorrChk')) $('autoCorrChk').checked = s.settings.autoCorrect !== false;
     if ($('liveAccChk')) $('liveAccChk').checked = s.settings.liveMode !== false;
     $('autoChk').checked = !!s.settings.autoStart;
     $('llmBase').value = s.settings.llmBaseUrl || '';
@@ -476,9 +477,12 @@ function renderTranscript(r) {
     $('transcribeState').textContent = '⏳ 正在整段转写（比实时更准）…';
   } else if (r.error) {
     $('transcribeState').textContent = '⚠️ ' + r.error;
+  } else if (r.correcting) {
+    $('transcribeState').textContent = '⏳ 正在校对同音字…';
   } else if (r.segments && r.segments.length) {
     const spk = r.diarized && r.speakers ? ` · 已区分 ${r.speakers} 个说话人` : '';
-    $('transcribeState').textContent = `共 ${r.segments.length} 段 · ${r.transcribed ? '已精校' : '实时结果'}${spk}`;
+    const fix = r.corrected ? ` · 已校对 ${r.corrected} 处` : '';
+    $('transcribeState').textContent = `共 ${r.segments.length} 段 · ${r.transcribed ? '已精校' : '实时结果'}${spk}${fix}`;
   } else if (r.transcribed) {
     $('transcribeState').textContent = '没有识别到语音：可能是麦克风静音或录音时无人说话。点左侧「检测麦克风电平」排查。';
   } else {
@@ -944,6 +948,29 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
       toast(e.target.checked ? '字幕已切到高精度模式（下次录制生效）' : '字幕已切到低延迟模式（下次录制生效）');
     } catch (err) { toast(err.message, 'err'); }
+  };
+  if ($('autoCorrChk')) $('autoCorrChk').onchange = async (e) => {
+    try {
+      settingsCache = await api('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ autoCorrect: e.target.checked }),
+      });
+      toast(e.target.checked ? '转写后会自动校对同音字' : '已关闭自动校对');
+    } catch (err) { toast(err.message, 'err'); }
+  };
+  if ($('correctBtn')) $('correctBtn').onclick = async () => {
+    if (!state.curId) return;
+    const btn = $('correctBtn');
+    btn.disabled = true;
+    btn.textContent = '校对中…';
+    try {
+      const r = await api(`/api/recordings/${state.curId}/correct`, { method: 'POST' });
+      toast(r.corrected > 0 ? `修正了 ${r.corrected} 处` : '没发现需要修改的地方');
+      await selectRec(state.curId);
+    } catch (e) { toast(e.message, 'err'); }
+    btn.disabled = false;
+    btn.textContent = '校对文字';
   };
   if ($('autoSumChk')) $('autoSumChk').onchange = async (e) => {
     try {

@@ -113,6 +113,9 @@
       <button id="overlayBtn" class="btn small">🪟 显示 / 隐藏悬浮字幕</button>
       <label class="chk"><input type="checkbox" id="meetingChk" checked><span>开会时自动提醒</span></label>
       <label class="chk"><input type="checkbox" id="autoSumChk" checked><span>录完自动出纪要</span></label>
+      <label class="chk" title="用模型把同音字改回来（买点→埋点、当陆夜→登录页）；需要本机模型或云端 Key">
+        <input type="checkbox" id="autoCorrChk" checked><span>自动校对文字</span>
+      </label>
       <label class="chk" title="更准：SenseVoice 整句识别，延迟约 1 秒；更快：流式模型，200ms 出字但同音字错得多">
         <input type="checkbox" id="liveAccChk" checked><span>字幕优先准确（关掉则更快）</span>
       </label>
@@ -217,6 +220,7 @@
         <div class="row">
           <button id="renameBtn" class="btn small">改名</button>
           <button id="transcribeBtn" class="btn small">重新转写</button>
+          <button id="correctBtn" class="btn small" title="用模型把同音字改回来（买点→埋点、当陆夜→登录页）">校对文字</button>
           <button id="diarizeBtn" class="btn small">区分说话人</button>
           <button id="transBtn" class="btn small">翻译字幕</button>
           <button id="summaryBtn" class="btn small">AI 纪要</button>

@@ -18,6 +18,8 @@ type Settings struct {
 	ConsentAccepted bool `json:"consentAccepted"`
 	// 会议自动提醒（默认开启，故用 Off 取反存储）
 	MeetingPromptOff bool `json:"meetingPromptOff"`
+	// 转写后用模型修同音字（默认开启，故用 Off 取反存储）
+	CorrectOff bool `json:"correctOff"`
 	// 说话人聚类阈值（0.3~0.9）：越大越容易把人分成不同的人，越小越容易合并
 	DiarThreshold float64 `json:"diarThreshold"`
 	// 实时字幕走哪条路："" / "accurate" 用 SenseVoice 整段解码（慢 0.5 秒但准得多），
@@ -183,6 +185,20 @@ func (s *Settings) SetCalendar(enabled bool, source string, leadMin int, autoSta
 	s.CalAutoStart = autoStart
 	s.CalAutoStop = autoStop
 	s.CalMode = mode
+	s.mu.Unlock()
+	s.save()
+}
+
+// AutoCorrect 转写完是否用模型修同音字
+func (s *Settings) AutoCorrect() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.CorrectOff
+}
+
+func (s *Settings) SetAutoCorrect(on bool) {
+	s.mu.Lock()
+	s.CorrectOff = !on
 	s.mu.Unlock()
 	s.save()
 }

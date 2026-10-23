@@ -402,9 +402,38 @@ func (a *App) autoTranscribe(rec *Recording) {
 		a.recorder.save(rec)
 	}
 
+	// 先修同音字，再出纪要：纪要的待办是从转写文本抽的，错字会一路传下去
+	if err == nil && len(segs) > 0 {
+		a.autoCorrect(rec)
+	}
+
 	// 录完就该有纪要，不该让用户再点一次。用后台跑，别挡住转写收尾。
 	if err == nil && len(segs) > 0 {
 		a.autoSummarize(rec)
+	}
+}
+
+// autoCorrect 用模型修转写里的同音字（设置里可关，没有模型时自动跳过）
+func (a *App) autoCorrect(rec *Recording) {
+	if !a.set.AutoCorrect() {
+		return
+	}
+	engine, base, key, model, localURL, localModel, localBin, localGGUF, gpuLayers := a.set.LLMEngineConfig()
+	// 纯规则模式（off）显然没有模型可用，别白跑
+	if engine == "off" {
+		return
+	}
+	spec, err := a.pickModel(engine, base, key, model, localURL, localModel, localBin, localGGUF, gpuLayers)
+	if err != nil {
+		log.Printf("[correct] 没有可用模型，跳过纠错：%v", err)
+		return
+	}
+	if !healable(rec.Segments) {
+		return
+	}
+	n := a.correctSegments(rec, spec)
+	if n > 0 {
+		log.Printf("[correct] 修正了 %d 段同音字/错别字: %s", n, rec.ID)
 	}
 }
 

@@ -67,6 +67,8 @@ type Recording struct {
 	CaptureNote  string     `json:"captureNote,omitempty"`
 	Transcribed  bool       `json:"transcribed"`
 	Summarizing  bool       `json:"summarizing,omitempty"`
+	Corrected    int        `json:"corrected,omitempty"` // 纠错改动的条数
+	Correcting   bool       `json:"correcting,omitempty"`
 	Transcribing bool       `json:"transcribing"`
 	Diarized     bool       `json:"diarized"`
 	Diarizing    bool       `json:"diarizing"`

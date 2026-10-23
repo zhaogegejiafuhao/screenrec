@@ -55,6 +55,7 @@ func (a *App) routes() http.Handler {
 	mux.HandleFunc("PUT /api/recordings/{id}", a.handleRename)
 	mux.HandleFunc("DELETE /api/recordings/{id}", a.handleDelete)
 	mux.HandleFunc("POST /api/recordings/{id}/transcribe", a.handleRetranscribe)
+	mux.HandleFunc("POST /api/recordings/{id}/correct", a.handleCorrect)
 	mux.HandleFunc("POST /api/recordings/{id}/diarize", a.handleDiarize)
 	mux.HandleFunc("GET /api/recordings/{id}/media", a.handleMedia)
 	mux.HandleFunc("GET /api/recordings/{id}/transcript", a.handleTranscript)
@@ -136,6 +137,7 @@ func (a *App) settingsView() map[string]any {
 		"consentAccepted": a.set.ConsentOK(),
 		"meetingPrompt":   a.set.MeetingEnabled(),
 		"autoSummary":     a.set.AutoSummary(),
+		"autoCorrect":     a.set.AutoCorrect(),
 		"liveMode":        a.set.LiveModeAccurate(),
 		"diarThreshold":   a.set.DiarThresholdVal(),
 		"mutedApps":       a.set.Muted(),
@@ -206,6 +208,7 @@ func (a *App) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		MeetingPrompt  *bool   `json:"meetingPrompt"`
 		AutoSummary    *bool   `json:"autoSummary"`
+		AutoCorrect    *bool   `json:"autoCorrect"`
 		LiveAccurate   *bool   `json:"liveAccurate"`
 		DiarThreshold  *float64 `json:"diarThreshold"`
 		OverlayHidden  *bool   `json:"overlayHidden"`
@@ -286,6 +289,9 @@ func (a *App) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.AutoSummary != nil {
 		a.set.SetAutoSummary(*req.AutoSummary)
+	}
+	if req.AutoCorrect != nil {
+		a.set.SetAutoCorrect(*req.AutoCorrect)
 	}
 	if req.DiarThreshold != nil {
 		a.set.SetDiarThreshold(*req.DiarThreshold)
@@ -535,6 +541,28 @@ func (a *App) handleRetranscribe(w http.ResponseWriter, r *http.Request) {
 	rec.Transcribed = false
 	go a.autoTranscribe(rec)
 	writeJSON(w, 200, map[string]string{"status": "started"})
+}
+
+// handleCorrect 手动跑一次同音字纠错
+func (a *App) handleCorrect(w http.ResponseWriter, r *http.Request) {
+	rec, ok := a.getOrLoad(r.PathValue("id"))
+	if !ok {
+		writeErr(w, 404, "记录不存在")
+		return
+	}
+	if len(rec.Segments) == 0 {
+		writeErr(w, 400, "这条记录还没有转写内容")
+		return
+	}
+	// 手动点等于明确要用，不受「自动纠错」开关限制
+	engine, base, key, model, localURL, localModel, localBin, localGGUF, gpuLayers := a.set.LLMEngineConfig()
+	spec, err := a.pickModel(engine, base, key, model, localURL, localModel, localBin, localGGUF, gpuLayers)
+	if err != nil {
+		writeErr(w, 400, "需要可用的模型（本机模型或云端 Key）："+err.Error())
+		return
+	}
+	n := a.correctSegments(rec, spec)
+	writeJSON(w, 200, map[string]any{"corrected": n})
 }
 
 // handleDiarize 启动说话人分离
