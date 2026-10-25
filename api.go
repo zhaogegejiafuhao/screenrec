@@ -56,6 +56,9 @@ func (a *App) routes() http.Handler {
 	mux.HandleFunc("DELETE /api/recordings/{id}", a.handleDelete)
 	mux.HandleFunc("POST /api/recordings/{id}/transcribe", a.handleRetranscribe)
 	mux.HandleFunc("POST /api/recordings/{id}/correct", a.handleCorrect)
+	// 调试用：往正在进行的录制里注入一句「实时字幕」，用来验证字幕链路和实时纠错。
+	// 只监听 127.0.0.1，且要求当前确实在录制。
+	mux.HandleFunc("POST /api/debug/say", a.handleDebugSay)
 	mux.HandleFunc("POST /api/recordings/{id}/diarize", a.handleDiarize)
 	mux.HandleFunc("GET /api/recordings/{id}/media", a.handleMedia)
 	mux.HandleFunc("GET /api/recordings/{id}/transcript", a.handleTranscript)
@@ -546,6 +549,33 @@ func (a *App) handleRetranscribe(w http.ResponseWriter, r *http.Request) {
 	rec.Transcribed = false
 	go a.autoTranscribe(rec)
 	writeJSON(w, 200, map[string]string{"status": "started"})
+}
+
+// handleDebugSay 注入一句实时字幕（调试用，验证实时纠错链路）
+func (a *App) handleDebugSay(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Text string `json:"text"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+	if strings.TrimSpace(req.Text) == "" {
+		writeErr(w, 400, "text 不能为空")
+		return
+	}
+	rec := a.recorder.Current()
+	if rec == nil || rec.Status != "recording" {
+		writeErr(w, 400, "当前没有在录制")
+		return
+	}
+	// 时间戳接在最后一段之后，避免和真实字幕的时间重叠
+	a.mu.Lock()
+	t0 := 0.0
+	if n := len(rec.Segments); n > 0 {
+		t0 = rec.Segments[n-1].End
+	}
+	idx := appendLive(rec, t0, t0+2, req.Text)
+	a.mu.Unlock()
+	a.pushLiveFix(idx)
+	writeJSON(w, 200, map[string]any{"index": idx, "text": req.Text})
 }
 
 // handleCorrect 手动跑一次同音字纠错

@@ -32,6 +32,21 @@ const correctPrompt = `你是语音识别结果的后处理器。输入是会议
 
 输出格式：与输入**完全相同的行数**，每行「序号|修正后的文本」。不要输出任何解释、不要加代码块标记。`
 
+// noThinkExtra 给本地 llama-server 的请求关掉思考模式。
+//
+// Qwen3 默认先输出一大段思考，纠错这种简单任务会被思考吃光 max_tokens，
+// 实测直接返回空字符串（表现为「模型没改」）。云端接口不认识这个参数，只对本地加。
+func noThinkExtra(spec llmSpec) map[string]any {
+	ex := map[string]any{}
+	for k, v := range spec.extra {
+		ex[k] = v
+	}
+	if strings.Contains(spec.base, "127.0.0.1") || strings.Contains(spec.base, "localhost") {
+		ex["chat_template_kwargs"] = map[string]any{"enable_thinking": false}
+	}
+	return ex
+}
+
 // correctSegments 修正转写里的同音字。返回改动条数；0 表示没改或没跑成。
 func (a *App) correctSegments(rec *Recording, spec llmSpec) int {
 	a.mu.RLock()
@@ -65,7 +80,7 @@ func (a *App) correctSegments(rec *Recording, spec llmSpec) int {
 		content, err := chatCompletionEx(ctx, spec.base, spec.key, spec.model, []chatMessage{
 			{Role: "system", Content: correctPrompt},
 			{Role: "user", Content: b.String()},
-		}, spec.timeout, spec.extra)
+		}, spec.timeout, noThinkExtra(spec))
 		cancel()
 		if err != nil {
 			log.Printf("[correct] 第 %d 批纠错失败（保留原文）：%v", i/batch+1, err)

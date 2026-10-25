@@ -839,7 +839,8 @@ func (r *Recorder) sysLiveLoop(rec *Recording, sysPath string, leadMs int64, sto
 			}
 			r.app.mu.Lock()
 			if rec.Status == "recording" {
-				appendLiveSrc(rec, s, e, text, "sys")
+				idx := appendLiveSrc(rec, s, e, text, "sys")
+				r.app.pushLiveFix(idx)
 			}
 			r.app.mu.Unlock()
 			r.translateAsync(rec, text, liveOn, liveDirCfg)

@@ -970,6 +970,23 @@ document.addEventListener('DOMContentLoaded', async () => {
       toast(e.target.checked ? '录屏时会边录边校对字幕（下次录制生效）' : '已关闭实时校对');
     } catch (err) { toast(err.message, 'err'); }
   };
+  // 演示：往正在录制的字幕里注入一句带错词的话，1~2 秒后会被实时纠错改掉
+  if ($('demoFixBtn')) $('demoFixBtn').onclick = async () => {
+    const samples = [
+      '付费转化的买点请小李在周四之前补完。',
+      '当陆夜改版本周五上线，设计稿今天给。',
+      '接口文当要同步给前端，顺带把埋点对一遍。',
+    ];
+    const text = samples[Math.floor(Math.random() * samples.length)];
+    try {
+      await api('/api/debug/say', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      toast('已注入：' + text + '（看它一会儿变成什么）', 'ok', 5000);
+    } catch (e) { toast('要先用「开始录制」再点这个', 'err'); }
+  };
   if ($('correctBtn')) $('correctBtn').onclick = async () => {
     if (!state.curId) return;
     const btn = $('correctBtn');

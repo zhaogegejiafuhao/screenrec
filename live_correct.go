@@ -19,17 +19,25 @@ import (
 	"time"
 )
 
-const correctOnePrompt = `修正下面这句话里的同音字和明显错别字。只输出修正后的句子本身，
-不要解释、不要加引号、不要换行。拿不准就原样输出。不要改写句子、不要增删内容。`
+// 单句纠错的提示词必须带示例：实测只写「修正同音字」时，4B 模型会保守到原样输出，
+// 给出两个「错→对」和一个「不用改」的对照后才会真的动手。
+const correctOnePrompt = `你去修正语音识别结果里的同音字错别字。只输出修正后的句子，不要解释、不要引号、不要换行。
+
+付费转化的买点请小李补完 → 付费转化的埋点请小李补完
+当陆夜改版本周五上线 → 登录页改版本周五上线
+这个方案我觉得可以 → 这个方案我觉得可以
+
+只改同音字和明显错字，不改写句子，拿不准就原样输出。`
 
 // liveCorrector 录制期间的后台纠错队列
 type liveCorrector struct {
-	app  *App
-	rec  *Recording
-	spec llmSpec
-	ch   chan int
-	done chan struct{}
-	once sync.Once
+	app   *App
+	rec   *Recording
+	spec  llmSpec
+	ch    chan int
+	done  chan struct{}
+	once  sync.Once
+	fixed int // 改过的句数，停止时写回记录
 }
 
 func newLiveCorrector(a *App, rec *Recording, spec llmSpec) *liveCorrector {
@@ -91,7 +99,7 @@ func (lc *liveCorrector) fixOne(idx int) {
 	fixed, err := chatCompletionEx(ctx, lc.spec.base, lc.spec.key, lc.spec.model, []chatMessage{
 		{Role: "system", Content: correctOnePrompt},
 		{Role: "user", Content: orig},
-	}, lc.spec.timeout, lc.spec.extra)
+	}, lc.spec.timeout, noThinkExtra(lc.spec))
 	cancel()
 	if err != nil {
 		log.Printf("[livefix] 纠错失败（保留原文）：%v", err)
@@ -112,6 +120,10 @@ func (lc *liveCorrector) fixOne(idx int) {
 	if idx < len(lc.rec.Segments) && lc.rec.Segments[idx].Text == orig {
 		lc.rec.Segments[idx].Text = fixed
 		lc.rec.LiveText = joinText(lc.rec.Segments)
+		lc.fixed++
+		a.mu.Unlock()
+		log.Printf("[livefix] %q → %q", orig, fixed)
+		return
 	}
 	a.mu.Unlock()
 }
@@ -157,6 +169,14 @@ func (a *App) stopLiveFix() {
 	a.liveMu.Unlock()
 	if lc != nil {
 		lc.close()
+		// 把实时改过的条数累加进记录，详情里能看到「已校对 N 处」
+		if lc.fixed > 0 {
+			a.mu.Lock()
+			lc.rec.Corrected += lc.fixed
+			a.mu.Unlock()
+			a.recorder.save(lc.rec)
+			log.Printf("[livefix] 实时纠错共改动 %d 句: %s", lc.fixed, lc.rec.ID)
+		}
 	}
 }
 
@@ -165,7 +185,8 @@ func (a *App) pushLiveFix(idx int) {
 	a.liveMu.Lock()
 	lc := a.liveFix
 	a.liveMu.Unlock()
-	if lc != nil {
-		lc.push(idx)
+	if lc == nil {
+		return
 	}
+	lc.push(idx)
 }
