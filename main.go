@@ -128,6 +128,7 @@ func main() {	setupDPI()
 		detectEncoder(app.ffmpeg) // 异步探测，顺便把缓存建起来
 		log.Printf("设备与显示器已就绪（耗时 %.1fs）", time.Since(start).Seconds())
 	}()
+	defer app.stopLiveFix() // 退出时收掉实时纠错的 goroutine
 	defer app.asr.Close()
 	defer app.stream.Close()
 

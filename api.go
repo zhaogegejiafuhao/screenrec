@@ -138,6 +138,7 @@ func (a *App) settingsView() map[string]any {
 		"meetingPrompt":   a.set.MeetingEnabled(),
 		"autoSummary":     a.set.AutoSummary(),
 		"autoCorrect":     a.set.AutoCorrect(),
+		"liveFix":         a.set.LiveFixOn(),
 		"liveMode":        a.set.LiveModeAccurate(),
 		"diarThreshold":   a.set.DiarThresholdVal(),
 		"mutedApps":       a.set.Muted(),
@@ -209,6 +210,7 @@ func (a *App) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		MeetingPrompt  *bool   `json:"meetingPrompt"`
 		AutoSummary    *bool   `json:"autoSummary"`
 		AutoCorrect    *bool   `json:"autoCorrect"`
+		LiveFix        *bool   `json:"liveFix"`
 		LiveAccurate   *bool   `json:"liveAccurate"`
 		DiarThreshold  *float64 `json:"diarThreshold"`
 		OverlayHidden  *bool   `json:"overlayHidden"`
@@ -292,6 +294,9 @@ func (a *App) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.AutoCorrect != nil {
 		a.set.SetAutoCorrect(*req.AutoCorrect)
+	}
+	if req.LiveFix != nil {
+		a.set.SetLiveFix(*req.LiveFix)
 	}
 	if req.DiarThreshold != nil {
 		a.set.SetDiarThreshold(*req.DiarThreshold)

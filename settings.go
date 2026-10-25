@@ -18,6 +18,8 @@ type Settings struct {
 	ConsentAccepted bool `json:"consentAccepted"`
 	// 会议自动提醒（默认开启，故用 Off 取反存储）
 	MeetingPromptOff bool `json:"meetingPromptOff"`
+	// 录制过程中实时纠错字幕（默认开启，故用 Off 取反存储）
+	LiveFixOff bool `json:"liveFixOff"`
 	// 转写后用模型修同音字（默认开启，故用 Off 取反存储）
 	CorrectOff bool `json:"correctOff"`
 	// 说话人聚类阈值（0.3~0.9）：越大越容易把人分成不同的人，越小越容易合并
@@ -185,6 +187,20 @@ func (s *Settings) SetCalendar(enabled bool, source string, leadMin int, autoSta
 	s.CalAutoStart = autoStart
 	s.CalAutoStop = autoStop
 	s.CalMode = mode
+	s.mu.Unlock()
+	s.save()
+}
+
+// LiveFixOn 录制中是否实时纠错字幕
+func (s *Settings) LiveFixOn() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.LiveFixOff
+}
+
+func (s *Settings) SetLiveFix(on bool) {
+	s.mu.Lock()
+	s.LiveFixOff = !on
 	s.mu.Unlock()
 	s.save()
 }

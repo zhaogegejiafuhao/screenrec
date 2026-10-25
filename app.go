@@ -14,6 +14,8 @@ import (
 
 // App 应用上下文
 type App struct {
+	liveMu     sync.Mutex
+	liveFix    *liveCorrector
 	dataDir    string
 	recordsDir string
 	assets     string
@@ -105,6 +107,7 @@ func (a *App) startRecording(opt StartOptions) (*Recording, error) {
 	a.calendar.Clear()
 	a.overlay.SetRecording()
 	a.overlay.SetVisible(true)
+	a.startLiveFix(rec) // 后台准备模型，就绪后开始实时纠错
 	return rec, nil
 }
 
@@ -115,6 +118,7 @@ func (a *App) stopRecording() error {
 	// ffmpeg 收到 q 还要写完文件（几秒），先让悬浮条显示「正在保存」，
 	// 否则用户以为没点中，转头去工坊再点一次
 	a.overlay.SetSaving()
+	a.stopLiveFix()
 	err := a.recorder.Stop()
 	a.overlay.SetIdle()
 	return err

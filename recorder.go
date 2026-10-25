@@ -653,8 +653,10 @@ func (r *Recorder) liveLoop(rec *Recording, pcmPath string, stop chan struct{}) 
 				}
 				r.app.mu.Lock()
 				if rec.Status == "recording" {
-					appendLive(rec, float64(uttStart)/bytesPerSec, float64(consumed)/bytesPerSec, text)
+					idx := appendLive(rec, float64(uttStart)/bytesPerSec, float64(consumed)/bytesPerSec, text)
 					rec.LivePartial = ""
+					// push 走的是另一把锁且非阻塞，队列满直接丢，不会卡住录制线程
+					r.app.pushLiveFix(idx)
 				}
 				r.app.mu.Unlock()
 				r.translateAsync(rec, text, liveOn, liveDirCfg)
@@ -710,10 +712,12 @@ func (r *Recorder) liveLoop(rec *Recording, pcmPath string, stop chan struct{}) 
 		startSec := float64(start) / bytesPerSec
 		endSec := startSec + float64(n)/bytesPerSec
 		r.app.mu.Lock()
+		idx := -1
 		if rec.Status == "recording" {
-			appendLive(rec, startSec, endSec, text)
+			idx = appendLive(rec, startSec, endSec, text)
 		}
 		r.app.mu.Unlock()
+		r.app.pushLiveFix(idx)
 		r.translateAsync(rec, text, liveOn, liveDirCfg)
 	}
 }
@@ -843,16 +847,16 @@ func (r *Recorder) sysLiveLoop(rec *Recording, sysPath string, leadMs int64, sto
 	}
 }
 
-// appendLive 追加实时转写（麦克风），裁掉与上一条重叠的文字（调用方需持锁）
-func appendLive(rec *Recording, start, end float64, text string) {
-	appendLiveSrc(rec, start, end, text, "mic")
+// appendLive 追加实时转写（麦克风），返回新段落下标（-1 表示没加）
+func appendLive(rec *Recording, start, end float64, text string) int {
+	return appendLiveSrc(rec, start, end, text, "mic")
 }
 
-// appendLiveSrc 按来源追加实时转写（调用方需持锁）
-func appendLiveSrc(rec *Recording, start, end float64, text, src string) {
+// appendLiveSrc 按来源追加实时转写（调用方需持锁），返回新段落下标
+func appendLiveSrc(rec *Recording, start, end float64, text, src string) int {
 	text = strings.TrimSpace(text)
 	if text == "" {
-		return
+		return -1
 	}
 	// 外放时同一句话会先被回环收到、再被麦克风收一遍：近似文本直接丢掉
 	for i := len(rec.Segments) - 1; i >= 0; i-- {
@@ -864,7 +868,7 @@ func appendLiveSrc(rec *Recording, start, end float64, text, src string) {
 			continue
 		}
 		if textSimilar(s.Text, text) >= 0.62 {
-			return
+			return -1
 		}
 	}
 	// 同源分块之间有 0.3 秒重叠，开头会重复上一段的尾巴
@@ -891,10 +895,11 @@ func appendLiveSrc(rec *Recording, start, end float64, text, src string) {
 		break
 	}
 	if text == "" {
-		return
+		return -1
 	}
 	rec.Segments = append(rec.Segments, Segment{Start: round2(start), End: round2(end), Text: text, Source: src})
 	rec.LiveText = joinText(rec.Segments)
+	return len(rec.Segments) - 1
 }
 
 // downmix48kStereo 把 48k/立体声/16bit 的回环 PCM 降成 16k 单声道。

@@ -119,6 +119,15 @@ func main() {
 		}
 	}
 
+	// 评测会临时改用户的「AI 纪要引擎」设置，跑完必须还原——
+	// 否则用户下次用会发现引擎被停在 off/rules 上，甚至以为功能坏了
+	origEngine := getEngine(*api)
+	defer func() {
+		if origEngine != "" {
+			_ = setEngine(*api, origEngine)
+		}
+	}()
+
 	var rows [][]engineResult // 每个 case 一行，列是引擎
 	for _, c := range set.Cases {
 		var row []engineResult
@@ -295,6 +304,23 @@ func runCase(api, engine string, c goldCase, thr float64) engineResult {
 		res.Sample = rec.Summary
 	}
 	return res
+}
+
+// getEngine 读当前引擎设置（读不到返回空串）
+func getEngine(api string) string {
+	resp, err := http.Get(strings.TrimRight(api, "/") + "/api/settings")
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	var m map[string]any
+	if json.NewDecoder(resp.Body).Decode(&m) != nil {
+		return ""
+	}
+	if v, ok := m["llmEngine"].(string); ok {
+		return v
+	}
+	return ""
 }
 
 func setEngine(api, engine string) error {

@@ -101,6 +101,7 @@ async function loadState() {
     $('meetingChk').checked = !!s.settings.meetingPrompt;
     if ($('autoSumChk')) $('autoSumChk').checked = s.settings.autoSummary !== false;
     if ($('autoCorrChk')) $('autoCorrChk').checked = s.settings.autoCorrect !== false;
+    if ($('liveFixChk')) $('liveFixChk').checked = s.settings.liveFix !== false;
     if ($('liveAccChk')) $('liveAccChk').checked = s.settings.liveMode !== false;
     $('autoChk').checked = !!s.settings.autoStart;
     $('llmBase').value = s.settings.llmBaseUrl || '';
@@ -957,6 +958,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         body: JSON.stringify({ autoCorrect: e.target.checked }),
       });
       toast(e.target.checked ? '转写后会自动校对同音字' : '已关闭自动校对');
+    } catch (err) { toast(err.message, 'err'); }
+  };
+  if ($('liveFixChk')) $('liveFixChk').onchange = async (e) => {
+    try {
+      settingsCache = await api('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ liveFix: e.target.checked }),
+      });
+      toast(e.target.checked ? '录屏时会边录边校对字幕（下次录制生效）' : '已关闭实时校对');
     } catch (err) { toast(err.message, 'err'); }
   };
   if ($('correctBtn')) $('correctBtn').onclick = async () => {

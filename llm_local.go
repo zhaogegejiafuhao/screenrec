@@ -82,14 +82,20 @@ func (a *App) ensureLocalLLM(bin, gguf, base string, gpuLayers int) error {
 	a.llm.mu.Lock()
 	defer a.llm.mu.Unlock()
 	if a.llm.cmd != nil {
-		// 刚拉起过，再等等
-		for i := 0; i < 60; i++ {
+		// 刚拉起过，说明还在加载模型：2.5GB 的 gguf 从机械盘读出来实测要 85 秒，
+		// 原来只等 60 秒，冷启动必超时。给到 180 秒，同时盯着进程有没有提前死掉。
+		deadline := time.Now().Add(180 * time.Second)
+		for time.Now().Before(deadline) {
 			if a.localLLMUp(base) {
 				return nil
 			}
+			if a.llm.cmd.ProcessState != nil {
+				a.llm.cmd = nil
+				return fmt.Errorf("本地模型服务已退出，看 llama-server.log")
+			}
 			time.Sleep(time.Second)
 		}
-		return fmt.Errorf("本地模型服务启动超时")
+		return fmt.Errorf("本地模型服务启动超时（180s）：模型可能太大或磁盘太慢，看 llama-server.log")
 	}
 	return a.startLocked(bin, gguf, base, gpuLayers)
 }
@@ -124,8 +130,8 @@ func (a *App) startLocked(bin, gguf, base string, gpuLayers int) error {
 	a.llm.at = time.Now()
 	log.Printf("[llm] 已拉起本地模型服务 pid=%d port=%s gpu层=%d", cmd.Process.Pid, port, ngl)
 
-	// 模型加载 + CUDA 初始化要一会儿，给 120 秒
-	deadline := time.Now().Add(120 * time.Second)
+	// 模型加载 + CUDA 初始化要一会儿：2.5GB gguf 在机械盘上实测 85 秒，给 180 秒
+	deadline := time.Now().Add(180 * time.Second)
 	for time.Now().Before(deadline) {
 		if a.localLLMUp(base) {
 			a.llm.ready = true
@@ -137,7 +143,7 @@ func (a *App) startLocked(bin, gguf, base string, gpuLayers int) error {
 		}
 		time.Sleep(time.Second)
 	}
-	return fmt.Errorf("本地模型服务启动超时（120s），看 %s", logFile)
+	return fmt.Errorf("本地模型服务启动超时（180s），看 %s", logFile)
 }
 
 // StopLocalLLM 退出时收掉自己拉起的模型服务
