@@ -481,15 +481,17 @@ func (a *App) handleLive(w http.ResponseWriter, r *http.Request) {
 	level := rec.LiveLevel
 	partial := rec.LivePartial
 	trans := rec.LiveTrans
+	sysWarn := rec.SysWarning
 	a.mu.RUnlock()
 	writeJSON(w, 200, map[string]any{
-		"recording": true,
-		"startedAt": started,
-		"segments":  segs,
-		"text":      joinText(segs),
-		"partial":   partial,
-		"trans":     trans,
-		"level":     level,
+		"recording":  true,
+		"startedAt":  started,
+		"segments":   segs,
+		"text":       joinText(segs),
+		"partial":    partial,
+		"trans":      trans,
+		"level":      level,
+		"sysWarning": sysWarn,
 	})
 }
 

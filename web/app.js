@@ -287,6 +287,8 @@ function startUI(rec) {
   $('recBtn').textContent = '■ 停止录制';
   $('recBtn').classList.add('stop');
   $('liveBox').hidden = false;
+  $('sysWarnBox').hidden = true;
+  $('sysWarnBox').textContent = '';
   $('liveText').textContent = '';
   $('liveState').textContent = '实时转写中…';
   const started = new Date(rec.startedAt).getTime();
@@ -362,6 +364,15 @@ async function pollLive() {
       tBox.hidden = true;
     }
     setMeter($('liveFill'), l.level || 0);
+    // 系统声音一直静音（设备不支持回环）要在录制中就提示，别等停止
+    if (l.sysWarning) {
+      if ($('sysWarnBox').textContent !== l.sysWarning) {
+        $('sysWarnBox').textContent = '⚠️ ' + l.sysWarning;
+      }
+      $('sysWarnBox').hidden = false;
+    } else {
+      $('sysWarnBox').hidden = true;
+    }
     let hint;
     if ((l.level || 0) < 3) hint = '⚠️ 没有检测到声音，检查麦克风';
     else if (l.segments.length || partial) hint = `已转写 ${l.segments.length} 段${partial ? ' · 识别中' : ''}`;

@@ -312,6 +312,8 @@ func (r *Recorder) Start(opt StartOptions) (*Recording, error) {
 	// 电脑正在播放的声音也进实时字幕：否则看视频/刷抖音时字幕条一直是空的
 	if opt.SystemAudio && lb != nil {
 		go r.sysLiveLoop(rec, sysFile, leadMs, r.liveStop)
+		// 录到一半就告诉用户「这个设备录不到系统声音」，别等停止才发现
+		go r.watchSysSilence(rec, sysFile)
 	}
 	return rec, nil
 }
