@@ -73,6 +73,7 @@ func (a *App) routes() http.Handler {
 	mux.HandleFunc("POST /api/calendar/refresh", a.handleCalendarRefresh)
 	mux.HandleFunc("POST /api/recordings/{id}/tts", a.handleTTS)
 	mux.HandleFunc("POST /api/recordings/{id}/use-as-voice", a.handleUseAsVoice)
+	mux.HandleFunc("POST /api/tts/voice-from-file", a.handleVoiceFromFile)
 	mux.HandleFunc("GET /api/recordings/{id}/tts", a.handleTTSAudio)
 
 	return logMiddleware(mux)
@@ -686,6 +687,28 @@ func (a *App) handleTranscript(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", ctype)
 	w.Header().Set("Content-Disposition", attachment(fn))
 	w.Write([]byte(body))
+}
+
+// handleVoiceFromFile 从用户指定的音频文件里截一句做成音色
+func (a *App) handleVoiceFromFile(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+	p := strings.TrimSpace(req.Path)
+	p = strings.Trim(p, "\"") // 从资源管理器复制来的路径常带引号
+	if p == "" {
+		writeErr(w, 400, "请填写音频文件的完整路径")
+		return
+	}
+	ref, text, err := a.UseFileAsVoice(p)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	url, _, _, lang := a.set.TTSConfig()
+	a.set.SetTTS(url, ref, text, lang)
+	writeJSON(w, 200, map[string]any{"ref": ref, "prompt": text})
 }
 
 // handleUseAsVoice 把这条录音里最清晰的一句做成配音音色

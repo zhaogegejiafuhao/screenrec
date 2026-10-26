@@ -999,6 +999,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     } catch (e) { toast('要先用「开始录制」再点这个', 'err'); }
   };
   // 把这条录音里最清晰的一句做成配音音色：截 3~10 秒 wav，转写文本一起写进设置
+  // 从任意录音文件里截一句做音色（自动识别文本）
+  if ($('voiceFileBtn')) $('voiceFileBtn').onclick = async () => {
+    const p = ($('voiceFile').value || '').trim();
+    if (!p) return toast('先填一个音频文件的完整路径', 'err');
+    const btn = $('voiceFileBtn');
+    btn.disabled = true;
+    btn.textContent = '识别中…';
+    try {
+      const r = await api('/api/tts/voice-from-file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: p }),
+      });
+      toast(`已截取：${r.prompt.slice(0, 24)}…`, 'ok', 6000);
+      await loadSettings();
+    } catch (e) { toast(e.message, 'err', 7000); }
+    btn.disabled = false;
+    btn.textContent = '用它做音色';
+  };
   if ($('useVoiceBtn')) $('useVoiceBtn').onclick = async () => {
     if (!state.curId) return;
     const btn = $('useVoiceBtn');

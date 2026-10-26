@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"screenrec/internal/winhide"
@@ -23,25 +24,66 @@ type voicePick struct {
 	Text  string
 }
 
-// pickVoiceSegment 从转写里挑一句适合当参考音频的：
-// 长度 8~40 字、时长 2.5~9 秒、带标点结尾（说明是一句完整的话）。
-// 优先挑中间位置的，开头结尾常有人声没起来或被截断。
+// pickVoiceSegment 从转写里挑一句最适合当参考音频的。
+//
+// 筛选：8~40 字、2.5~9 秒。排序不是随便取一句，而是打分——
+// GPT-SoVITS 的参考音频 5~10 秒最稳，太短（3 秒）音色不够充分、太长会被截断。
+// 打分项：时长越接近 6.5 秒越高、字数越接近 20 字越高；带标点结尾的加分（说明是完整句）。
 func pickVoiceSegment(segs []Segment) (voicePick, bool) {
-	var cands []voicePick
-	for _, s := range segs {
-		t := strings.TrimSpace(s.Text)
-		n := len([]rune(t))
-		dur := s.End - s.Start
-		if n < 8 || n > 40 || dur < 2.5 || dur > 9 {
-			continue
+	type scored struct {
+		p voicePick
+		s float64
+	}
+	var cands []scored
+	add := func(p voicePick) {
+		n := len([]rune(p.Text))
+		dur := p.End - p.Start
+		if n < 8 || n > 45 || dur < 2.5 || dur > 9 {
+			return
 		}
-		cands = append(cands, voicePick{Start: s.Start, End: s.End, Text: t})
+		// 时长分：6.5 秒满分，偏离越远扣得越多
+		ds := 1 - math.Abs(dur-6.5)/3.5
+		if ds < 0 {
+			ds = 0
+		}
+		// 字数分：20 字满分
+		ns := 1 - math.Abs(float64(n)-20)/20
+		if ns < 0 {
+			ns = 0
+		}
+		score := ds*2 + ns // 时长权重更高
+		if strings.HasSuffix(p.Text, "。") || strings.HasSuffix(p.Text, "！") || strings.HasSuffix(p.Text, "？") {
+			score += 0.3
+		}
+		cands = append(cands, scored{p, score})
+	}
+
+	for i, s := range segs {
+		t := strings.TrimSpace(s.Text)
+		add(voicePick{Start: s.Start, End: s.End, Text: t})
+		// 单句太短时，把紧接着的下一句并进来凑够 5~9 秒。
+		// 只并间隔 <0.5 秒的（几乎连续说话），否则中间的语气词会让文本和音频对不上。
+		if i+1 < len(segs) {
+			nx := segs[i+1]
+			if nx.Start-s.End < 0.5 && nx.End-s.Start <= 9 {
+				add(voicePick{
+					Start: s.Start,
+					End:   nx.End,
+					Text:  t + strings.TrimSpace(nx.Text),
+				})
+			}
+		}
 	}
 	if len(cands) == 0 {
 		return voicePick{}, false
 	}
-	// 取候选中段那句（中间位置的录音质量通常最稳）
-	return cands[len(cands)/2], true
+	best := cands[0]
+	for _, c := range cands[1:] {
+		if c.s > best.s {
+			best = c
+		}
+	}
+	return best.p, true
 }
 
 // extractVoiceRef 从媒体文件里截一段 32k 单声道 wav（GPT-SoVITS 的输入要求）
@@ -70,6 +112,55 @@ func (a *App) extractVoiceRef(media string, pick voicePick, out string) error {
 		return fmt.Errorf("截出来的参考音频太短，这段录音可能没有可用的人声")
 	}
 	return nil
+}
+
+// UseFileAsVoice 从用户指定的任意音频文件里挑一句做成音色。
+//
+// 只处理前 5 分钟：克隆音色用不了那么长，而整段识别会让用户干等
+// （一小时会议录音识别要几分钟）。
+func (a *App) UseFileAsVoice(src string) (string, string, error) {
+	if a.ffmpeg == "" || a.python == "" {
+		return "", "", fmt.Errorf("缺少 ffmpeg 或识别引擎")
+	}
+	st, err := os.Stat(src)
+	if err != nil || st.IsDir() {
+		return "", "", fmt.Errorf("找不到音频文件：%s", src)
+	}
+	tmpDir, err := os.MkdirTemp(a.dataDir, "voice-")
+	if err != nil {
+		return "", "", err
+	}
+	defer os.RemoveAll(tmpDir)
+	clip := filepath.Join(tmpDir, "clip.wav")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	cmd := winhide.CommandContext(ctx, a.ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+		"-i", src, "-t", "300", "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", clip)
+	cmd.Dir = filepath.Dir(a.ffmpeg)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return "", "", fmt.Errorf("读取音频失败（支持 wav/mp3/m4a/mp4 等）：%v %s", err, firstN(out, 200))
+	}
+
+	segs, err := a.asr.Batch(clip)
+	if err != nil {
+		return "", "", fmt.Errorf("识别失败: %v", err)
+	}
+	pick, ok := pickVoiceSegment(segs)
+	if !ok {
+		return "", "", fmt.Errorf("这个文件里没找到合适的一句（需要 8~40 字、2.5~9 秒的完整说话），换一段人声清晰的录音试试")
+	}
+
+	dir := filepath.Join(a.dataDir, "voices")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", "", err
+	}
+	out := filepath.Join(dir, "me-"+time.Now().Format("20060102-150405")+".wav")
+	// 从原文件截，不经过 16k 中转，保音质
+	if err := a.extractVoiceRef(src, pick, out); err != nil {
+		return "", "", err
+	}
+	return out, pick.Text, nil
 }
 
 // UseRecordingAsVoice 把录音做成音色，返回参考音频路径与文本
