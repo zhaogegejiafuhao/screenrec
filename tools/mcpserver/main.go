@@ -23,7 +23,7 @@ import (
 var (
 	baseURL   = "http://127.0.0.1:8790"
 	httpCli   = &http.Client{Timeout: 120 * time.Second}
-	serverVer = "0.10.0"
+	serverVer = "0.11.0"
 )
 
 type rpcReq struct {

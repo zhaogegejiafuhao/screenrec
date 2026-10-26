@@ -998,6 +998,20 @@ document.addEventListener('DOMContentLoaded', async () => {
       toast('已注入：' + text + '（看它一会儿变成什么）', 'ok', 5000);
     } catch (e) { toast('要先用「开始录制」再点这个', 'err'); }
   };
+  // 把这条录音里最清晰的一句做成配音音色：截 3~10 秒 wav，转写文本一起写进设置
+  if ($('useVoiceBtn')) $('useVoiceBtn').onclick = async () => {
+    if (!state.curId) return;
+    const btn = $('useVoiceBtn');
+    btn.disabled = true;
+    btn.textContent = '截取中…';
+    try {
+      const r = await api(`/api/recordings/${state.curId}/use-as-voice`, { method: 'POST' });
+      toast(`已设为本机音色：${r.prompt.slice(0, 20)}…` + (r.url ? '' : '（还要在左下角填 GPT-SoVITS 地址）'), 'ok', 6000);
+      loadSettings();
+    } catch (e) { toast(e.message, 'err', 6000); }
+    btn.disabled = false;
+    btn.textContent = '设为我的音色';
+  };
   if ($('correctBtn')) $('correctBtn').onclick = async () => {
     if (!state.curId) return;
     const btn = $('correctBtn');

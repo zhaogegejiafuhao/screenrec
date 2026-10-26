@@ -72,6 +72,7 @@ func (a *App) routes() http.Handler {
 	mux.HandleFunc("GET /api/calendar", a.handleCalendar)
 	mux.HandleFunc("POST /api/calendar/refresh", a.handleCalendarRefresh)
 	mux.HandleFunc("POST /api/recordings/{id}/tts", a.handleTTS)
+	mux.HandleFunc("POST /api/recordings/{id}/use-as-voice", a.handleUseAsVoice)
 	mux.HandleFunc("GET /api/recordings/{id}/tts", a.handleTTSAudio)
 
 	return logMiddleware(mux)
@@ -685,6 +686,39 @@ func (a *App) handleTranscript(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", ctype)
 	w.Header().Set("Content-Disposition", attachment(fn))
 	w.Write([]byte(body))
+}
+
+// handleUseAsVoice 把这条录音里最清晰的一句做成配音音色
+func (a *App) handleUseAsVoice(w http.ResponseWriter, r *http.Request) {
+	rec, ok := a.getOrLoad(r.PathValue("id"))
+	if !ok {
+		writeErr(w, 404, "记录不存在")
+		return
+	}
+	// 停止后转写可能还在跑，等一小会儿
+	for i := 0; i < 30; i++ {
+		a.mu.RLock()
+		n := len(rec.Segments)
+		busy := rec.Transcribing
+		a.mu.RUnlock()
+		if n > 0 || !busy {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	ref, text, err := a.UseRecordingAsVoice(rec)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	// 保留已配置的 GPT-SoVITS 地址和语种，只换音色
+	url, _, _, lang := a.set.TTSConfig()
+	a.set.SetTTS(url, ref, text, lang)
+	writeJSON(w, 200, map[string]any{
+		"ref":    ref,
+		"prompt": text,
+		"url":    url,
+	})
 }
 
 // handleTTS 用本地 GPT-SoVITS 合成配音
