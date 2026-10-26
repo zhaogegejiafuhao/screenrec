@@ -34,7 +34,8 @@ func sysPCMLevel(path string, rate, ch int, seconds float64) (float64, bool) {
 		return 0, false
 	}
 	size := st.Size()
-	n := int64(rate * ch * 2 * int(seconds))
+	// 注意别写成 rate*ch*2*int(seconds)：seconds 传 0.5 会被截断成 0
+	n := int64(float64(rate*ch*2) * seconds)
 	if n > size {
 		n = size
 	}
